@@ -1,6 +1,7 @@
 mod command;
 mod command_parser;
 mod server;
+mod thread_pool;
 
 use crate::server::{Server, ServerOptions};
 use std::error::Error;
