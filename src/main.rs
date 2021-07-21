@@ -8,6 +8,7 @@ use std::error::Error;
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     Server::new(ServerOptions {
+        thread_count: 2,
         backlog: 128,
         only_v6: false,
         reuse_address: true,
