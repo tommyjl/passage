@@ -16,8 +16,8 @@ pub trait ThreadPool {
 }
 
 pub struct ReceiverThreadPool {
-    _tx: mpsc::SyncSender<Job>,
-    _workers: Vec<Worker>,
+    tx: mpsc::SyncSender<Job>,
+    threads: Vec<thread::JoinHandle<()>>,
 }
 
 impl ThreadPool for ReceiverThreadPool {
@@ -25,15 +25,20 @@ impl ThreadPool for ReceiverThreadPool {
         let (tx, rx) = mpsc::sync_channel::<Job>(1);
         let rx = Arc::new(Mutex::new(rx));
 
-        let mut workers = Vec::with_capacity(size);
+        let mut threads = Vec::with_capacity(size);
         for _ in 0..size {
-            workers.push(Worker::new(Arc::clone(&rx)));
+            let rx = Arc::clone(&rx);
+            let thread = thread::spawn(move || {
+                log::debug!("working");
+                loop {
+                    let job = rx.lock().unwrap().recv().unwrap();
+                    job();
+                }
+            });
+            threads.push(thread);
         }
 
-        Self {
-            _tx: tx,
-            _workers: workers,
-        }
+        Self { tx, threads }
     }
 
     fn execute<F>(&self, job: F) -> Result<(), Box<dyn Error>>
@@ -41,24 +46,7 @@ impl ThreadPool for ReceiverThreadPool {
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(job);
-        self._tx.send(job)?;
+        self.tx.send(job)?;
         Ok(())
-    }
-}
-
-struct Worker {
-    _thread: thread::JoinHandle<()>,
-}
-
-impl Worker {
-    pub fn new(rx: Arc<Mutex<mpsc::Receiver<Job>>>) -> Self {
-        let thread = thread::spawn(move || {
-            log::debug!("working");
-            loop {
-                let job = rx.lock().unwrap().recv().unwrap();
-                job();
-            }
-        });
-        Self { _thread: thread }
     }
 }
