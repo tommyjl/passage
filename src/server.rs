@@ -15,22 +15,26 @@ pub struct Server {
 
 pub struct ServerOptions {
     pub backlog: i32,
+    pub only_v6: bool,
+    pub reuse_address: bool,
+    pub reuse_port: bool,
+    pub nodelay: bool,
 }
 
 impl ServerOptions {
     pub fn set_sockopts(&self, socket: &Socket) -> io::Result<()> {
         if socket.only_v6()? {
-            socket.set_only_v6(false)?;
+            socket.set_only_v6(self.only_v6)?;
         }
-        trace!("IPV6_V6ONLY = {:?}", socket.only_v6()?);
+        trace!("IPV6_V6ONLY = {}", socket.only_v6()?);
 
-        socket.set_reuse_address(true)?;
-        trace!("SO_REUSEADDR = {:?}", socket.reuse_address()?);
+        socket.set_reuse_address(self.reuse_address)?;
+        trace!("SO_REUSEADDR = {}", socket.reuse_address()?);
 
-        socket.set_reuse_port(true)?;
-        trace!("SO_REUSEPORT = {:?}", socket.reuse_port()?);
+        socket.set_reuse_port(self.reuse_port)?;
+        trace!("SO_REUSEPORT = {}", socket.reuse_port()?);
 
-        socket.set_nodelay(true)?;
+        socket.set_nodelay(self.nodelay)?;
         let nodelay = socket.nodelay()?;
         trace!("TCP_NODELAY = {}", nodelay);
 
