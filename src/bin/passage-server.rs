@@ -1,12 +1,5 @@
-mod command;
-mod command_parser;
-mod db;
-mod server;
-mod thread_pool;
-
-use thread_pool::*;
-
-use crate::server::{Server, ServerOptions};
+use passage::server::{Server, ServerOptions};
+use passage::thread_pool::*;
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
