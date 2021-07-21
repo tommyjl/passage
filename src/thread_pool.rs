@@ -5,13 +5,23 @@ use std::thread;
 
 pub type Job = Box<dyn FnOnce() + Send + 'static>;
 
-pub struct ThreadPool {
+pub trait ThreadPool {
+    fn new(size: usize) -> Self
+    where
+        Self: Sized;
+
+    fn execute<F>(&self, job: F) -> Result<(), Box<dyn Error>>
+    where
+        F: FnOnce() + Send + 'static;
+}
+
+pub struct ReceiverThreadPool {
     _tx: mpsc::SyncSender<Job>,
     _workers: Vec<Worker>,
 }
 
-impl ThreadPool {
-    pub fn new(size: usize) -> Self {
+impl ThreadPool for ReceiverThreadPool {
+    fn new(size: usize) -> Self {
         let (tx, rx) = mpsc::sync_channel::<Job>(1);
         let rx = Arc::new(Mutex::new(rx));
 
@@ -26,7 +36,7 @@ impl ThreadPool {
         }
     }
 
-    pub fn execute<F>(&self, job: F) -> Result<(), Box<dyn Error>>
+    fn execute<F>(&self, job: F) -> Result<(), Box<dyn Error>>
     where
         F: FnOnce() + Send + 'static,
     {
@@ -36,7 +46,7 @@ impl ThreadPool {
     }
 }
 
-pub struct Worker {
+struct Worker {
     _thread: thread::JoinHandle<()>,
 }
 

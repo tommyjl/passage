@@ -9,8 +9,9 @@ use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 
 const MESSAGE_MAX_SIZE: usize = 512;
 
-pub struct Server {
+pub struct Server<P: ThreadPool> {
     opt: ServerOptions,
+    pool: P,
 }
 
 pub struct ServerOptions {
@@ -44,9 +45,12 @@ impl ServerOptions {
     }
 }
 
-impl Server {
-    pub fn new(options: ServerOptions) -> Self {
-        Self { opt: options }
+impl<P> Server<P>
+where
+    P: ThreadPool,
+{
+    pub fn new(options: ServerOptions, pool: P) -> Self {
+        Self { opt: options, pool }
     }
 
     pub fn run(&self) -> Result<(), Box<dyn Error>> {
@@ -60,8 +64,6 @@ impl Server {
         socket.listen(self.opt.backlog)?;
         trace!("Listening on {}:{}", address.ip(), address.port());
 
-        let pool = ThreadPool::new(self.opt.thread_count);
-
         let listener: TcpListener = socket.into();
         for stream in listener.incoming() {
             let stream = stream?;
@@ -70,7 +72,7 @@ impl Server {
             self.opt.set_sockopts(&stream)?;
 
             let stream: TcpStream = stream.into();
-            pool.execute(move || handle_client(stream)).unwrap();
+            self.pool.execute(move || handle_client(stream)).unwrap();
         }
 
         Ok(())
