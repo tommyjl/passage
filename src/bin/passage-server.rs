@@ -7,6 +7,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let options = ServerOptions {
         thread_count: 2,
         backlog: 128,
+        port: "12345",
         only_v6: false,
         reuse_address: true,
         reuse_port: true,

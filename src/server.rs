@@ -17,6 +17,7 @@ pub struct Server<P: ThreadPool> {
 pub struct ServerOptions {
     pub thread_count: usize,
     pub backlog: i32,
+    pub port: &'static str,
 
     // Socket options
     pub only_v6: bool,
@@ -27,11 +28,6 @@ pub struct ServerOptions {
 
 impl ServerOptions {
     pub fn set_sockopts(&self, socket: &Socket) -> io::Result<()> {
-        if socket.only_v6()? {
-            socket.set_only_v6(self.only_v6)?;
-        }
-        trace!("IPV6_V6ONLY = {}", socket.only_v6()?);
-
         socket.set_reuse_address(self.reuse_address)?;
         trace!("SO_REUSEADDR = {}", socket.reuse_address()?);
 
@@ -51,9 +47,9 @@ impl<P: ThreadPool> Server<P> {
     }
 
     pub fn run(&self) -> Result<(), Box<dyn Error>> {
-        let socket = Socket::new(Domain::IPV6, Type::STREAM, None)?;
+        let address: SocketAddr = format!("0.0.0.0:{}", self.opt.port).parse()?;
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
 
-        let address: SocketAddr = "[::1]:12345".parse()?;
         socket.bind(&address.into())?;
 
         self.opt.set_sockopts(&socket)?;
