@@ -6,10 +6,6 @@ use std::thread;
 pub type Job = Box<dyn FnOnce() + Send + 'static>;
 
 pub trait ThreadPool {
-    fn new(size: usize) -> Self
-    where
-        Self: Sized;
-
     fn execute<F>(&self, job: F) -> Result<(), Box<dyn Error>>
     where
         F: FnOnce() + Send + 'static;
@@ -25,8 +21,8 @@ pub enum Message {
     Term,
 }
 
-impl ThreadPool for ReceiverThreadPool {
-    fn new(size: usize) -> Self {
+impl ReceiverThreadPool {
+    pub fn new(size: usize) -> Self {
         let (tx, rx) = mpsc::sync_channel::<Message>(1);
         let rx = Arc::new(Mutex::new(rx));
 
@@ -49,7 +45,9 @@ impl ThreadPool for ReceiverThreadPool {
 
         Self { tx, threads }
     }
+}
 
+impl ThreadPool for ReceiverThreadPool {
     fn execute<F>(&self, job: F) -> Result<(), Box<dyn Error>>
     where
         F: FnOnce() + Send + 'static,
