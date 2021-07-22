@@ -13,4 +13,4 @@ build-dev:
 
 .PHONY: run
 run: build-dev
-	docker run -p 12345:12345 -it $(server-tag)
+	docker run --rm -p 12345:12345 -it $(server-tag)
