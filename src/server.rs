@@ -45,10 +45,7 @@ impl ServerOptions {
     }
 }
 
-impl<P> Server<P>
-where
-    P: ThreadPool,
-{
+impl<P: ThreadPool> Server<P> {
     pub fn new(options: ServerOptions, pool: P) -> Self {
         Self { opt: options, pool }
     }

@@ -16,24 +16,33 @@ pub trait ThreadPool {
 }
 
 pub struct ReceiverThreadPool {
-    tx: mpsc::SyncSender<Job>,
+    tx: mpsc::SyncSender<Message>,
     threads: Vec<thread::JoinHandle<()>>,
+}
+
+pub enum Message {
+    Job(Job),
+    Term,
 }
 
 impl ThreadPool for ReceiverThreadPool {
     fn new(size: usize) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<Job>(1);
+        let (tx, rx) = mpsc::sync_channel::<Message>(1);
         let rx = Arc::new(Mutex::new(rx));
 
         let mut threads = Vec::with_capacity(size);
-        for _ in 0..size {
+        for i in 0..size {
+            let id = i;
             let rx = Arc::clone(&rx);
             let thread = thread::spawn(move || {
-                log::debug!("working");
                 loop {
-                    let job = rx.lock().unwrap().recv().unwrap();
-                    job();
+                    log::debug!("Worker-{}: Ready for next order", id);
+                    match rx.lock().unwrap().recv().unwrap() {
+                        Message::Job(job) => job(),
+                        Message::Term => break,
+                    }
                 }
+                log::debug!("Worker-{}: Goodbye", id);
             });
             threads.push(thread);
         }
@@ -46,7 +55,18 @@ impl ThreadPool for ReceiverThreadPool {
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(job);
-        self.tx.send(job)?;
+        self.tx.send(Message::Job(job))?;
         Ok(())
+    }
+}
+
+impl Drop for ReceiverThreadPool {
+    fn drop(&mut self) {
+        for _ in 0..self.threads.len() {
+            self.tx.send(Message::Term).unwrap();
+        }
+        while let Some(thread) = self.threads.pop() {
+            thread.join().unwrap();
+        }
     }
 }
