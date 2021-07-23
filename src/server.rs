@@ -1,4 +1,5 @@
 use crate::command::Command;
+use crate::db::{Database, HashMapDatabase};
 use crate::thread_pool::ThreadPool;
 use log::{error, info, trace, warn};
 use socket2::{Domain, Socket, Type};
@@ -6,12 +7,14 @@ use std::error::Error;
 use std::io;
 use std::io::prelude::*;
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::sync::Arc;
 
 const MESSAGE_MAX_SIZE: usize = 512;
 
 pub struct Server<P: ThreadPool> {
     opt: ServerOptions,
     pool: P,
+    db: Arc<dyn Database>,
 }
 
 pub struct ServerOptions {
@@ -43,7 +46,12 @@ impl ServerOptions {
 
 impl<P: ThreadPool> Server<P> {
     pub fn new(options: ServerOptions, pool: P) -> Self {
-        Self { opt: options, pool }
+        let db = Arc::new(HashMapDatabase::new());
+        Self {
+            opt: options,
+            pool,
+            db,
+        }
     }
 
     pub fn run(&self) -> Result<(), Box<dyn Error>> {
@@ -65,24 +73,66 @@ impl<P: ThreadPool> Server<P> {
             self.opt.set_sockopts(&stream)?;
 
             let stream: TcpStream = stream.into();
-            self.pool.execute(move || handle_client(stream)).unwrap();
+            let db = self.db.clone();
+            self.pool
+                .execute(move || handle_client(stream, db))
+                .unwrap();
         }
 
         Ok(())
     }
 }
 
-fn handle_client(mut stream: TcpStream) {
+fn handle_client(mut stream: TcpStream, db: Arc<dyn Database>) {
     let mut buf = [0; MESSAGE_MAX_SIZE];
     let len = stream.read(&mut buf).unwrap();
 
     match Command::parse(&buf[0..len]) {
-        Ok(cmd) => info!("Incoming command: {:?}", cmd),
+        Ok(cmd) => {
+            info!("Incoming command: {:?}", cmd);
+            match cmd {
+                Command::Get(key) => {
+                    let value = db
+                        .get(key.into())
+                        .map(|v| {
+                            format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
+                                .as_bytes()
+                                .to_owned()
+                        })
+                        .unwrap_or(b"Err: Not found\r\n".to_vec());
+                    if let Err(error) = stream.write(&value) {
+                        warn!("Write: {}", error);
+                    }
+                }
+                Command::Set(key, value) => {
+                    let old_value = db
+                        .set(key.into(), value.into())
+                        .map(|v| {
+                            format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
+                                .as_bytes()
+                                .to_owned()
+                        })
+                        .unwrap_or(b"Err: Not found\r\n".to_vec());
+                    if let Err(error) = stream.write(&old_value) {
+                        warn!("Write: {}", error);
+                    }
+                }
+                Command::Remove(key) => {
+                    let old_value = db
+                        .remove(key.into())
+                        .map(|v| {
+                            format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
+                                .as_bytes()
+                                .to_owned()
+                        })
+                        .unwrap_or(b"Err: Not found\r\n".to_vec());
+                    if let Err(error) = stream.write(&old_value) {
+                        warn!("Write: {}", error);
+                    }
+                }
+            };
+        }
         Err(error) => error!("{}", error),
-    }
-
-    if let Err(error) = stream.write(b"Thank you for your patronage!\r\n") {
-        warn!("Write: {}", error);
     }
 
     if let Err(error) = stream.shutdown(Shutdown::Both) {
