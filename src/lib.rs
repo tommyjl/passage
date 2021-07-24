@@ -1,5 +1,6 @@
 mod command;
 mod command_parser;
+mod wal;
 
 pub mod client;
 pub mod db;

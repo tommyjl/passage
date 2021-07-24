@@ -1,6 +1,7 @@
 use crate::command::Command;
 use crate::db::{Database, HashMapDatabase};
 use crate::thread_pool::ThreadPool;
+use crate::wal::Wal;
 use log::{error, info, trace, warn};
 use socket2::{Domain, Socket, Type};
 use std::error::Error;
@@ -9,12 +10,13 @@ use std::io::prelude::*;
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 
-const MESSAGE_MAX_SIZE: usize = 512;
+pub const MESSAGE_MAX_SIZE: usize = 512;
 
 pub struct Server<P: ThreadPool> {
     opt: ServerOptions,
     pool: P,
     db: Arc<dyn Database>,
+    wal: Arc<Wal>,
 }
 
 pub struct ServerOptions {
@@ -47,10 +49,12 @@ impl ServerOptions {
 impl<P: ThreadPool> Server<P> {
     pub fn new(options: ServerOptions, pool: P) -> Self {
         let db = Arc::new(HashMapDatabase::new());
+        let wal = Arc::new(Wal::new().unwrap());
         Self {
             opt: options,
             pool,
             db,
+            wal,
         }
     }
 
@@ -72,10 +76,13 @@ impl<P: ThreadPool> Server<P> {
             let stream: Socket = stream.into();
             self.opt.set_sockopts(&stream)?;
 
-            let stream: TcpStream = stream.into();
-            let db = self.db.clone();
             self.pool
-                .execute(move || handle_client(stream, db))
+                .execute({
+                    let stream: TcpStream = stream.into();
+                    let db = self.db.clone();
+                    let wal = self.wal.clone();
+                    move || handle_client(stream, db, wal)
+                })
                 .unwrap();
         }
 
@@ -83,13 +90,14 @@ impl<P: ThreadPool> Server<P> {
     }
 }
 
-fn handle_client(mut stream: TcpStream, db: Arc<dyn Database>) {
+fn handle_client(mut stream: TcpStream, db: Arc<dyn Database>, wal: Arc<Wal>) {
     let mut buf = [0; MESSAGE_MAX_SIZE];
     let len = stream.read(&mut buf).unwrap();
 
     match Command::parse(&buf[0..len]) {
         Ok(cmd) => {
             info!("Incoming command: {:?}", cmd);
+            wal.append(&cmd).unwrap();
             match cmd {
                 Command::Get(key) => {
                     let value = db
