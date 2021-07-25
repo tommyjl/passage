@@ -48,8 +48,11 @@ impl ServerOptions {
 
 impl<P: ThreadPool> Server<P> {
     pub fn new(options: ServerOptions, pool: P) -> Self {
-        let db = Arc::new(HashMapDatabase::new());
+        let db: Arc<dyn Database> = Arc::new(HashMapDatabase::new());
         let wal = Arc::new(Wal::new().unwrap());
+        while let Some(cmd) = wal.read() {
+            let _response = handle_command(cmd, &db);
+        }
         Self {
             opt: options,
             pool,
@@ -98,52 +101,44 @@ fn handle_client(mut stream: TcpStream, db: Arc<dyn Database>, wal: Arc<Wal>) {
         Ok(cmd) => {
             info!("Incoming command: {:?}", cmd);
             wal.append(&cmd).unwrap();
-            match cmd {
-                Command::Get(key) => {
-                    let value = db
-                        .get(key.into())
-                        .map(|v| {
-                            format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
-                                .as_bytes()
-                                .to_owned()
-                        })
-                        .unwrap_or(b"Err: Not found\r\n".to_vec());
-                    if let Err(error) = stream.write(&value) {
-                        warn!("Write: {}", error);
-                    }
-                }
-                Command::Set(key, value) => {
-                    let old_value = db
-                        .set(key.into(), value.into())
-                        .map(|v| {
-                            format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
-                                .as_bytes()
-                                .to_owned()
-                        })
-                        .unwrap_or(b"Err: Not found\r\n".to_vec());
-                    if let Err(error) = stream.write(&old_value) {
-                        warn!("Write: {}", error);
-                    }
-                }
-                Command::Remove(key) => {
-                    let old_value = db
-                        .remove(key.into())
-                        .map(|v| {
-                            format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
-                                .as_bytes()
-                                .to_owned()
-                        })
-                        .unwrap_or(b"Err: Not found\r\n".to_vec());
-                    if let Err(error) = stream.write(&old_value) {
-                        warn!("Write: {}", error);
-                    }
-                }
-            };
+            let response = handle_command(cmd, &db);
+            if let Err(error) = stream.write(&response) {
+                warn!("Write: {}", error);
+            }
         }
         Err(error) => error!("{}", error),
     }
 
     if let Err(error) = stream.shutdown(Shutdown::Both) {
         warn!("Shutdown: {}", error);
+    }
+}
+
+fn handle_command(cmd: Command, db: &Arc<dyn Database>) -> Vec<u8> {
+    match cmd {
+        Command::Get(key) => db
+            .get(key.into())
+            .map(|v| {
+                format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
+                    .as_bytes()
+                    .to_owned()
+            })
+            .unwrap_or(b"Err: Not found\r\n".to_vec()),
+        Command::Set(key, value) => db
+            .set(key.into(), value.into())
+            .map(|v| {
+                format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
+                    .as_bytes()
+                    .to_owned()
+            })
+            .unwrap_or(b"Err: Not found\r\n".to_vec()),
+        Command::Remove(key) => db
+            .remove(key.into())
+            .map(|v| {
+                format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
+                    .as_bytes()
+                    .to_owned()
+            })
+            .unwrap_or(b"Err: Not found\r\n".to_vec()),
     }
 }

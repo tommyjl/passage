@@ -1,6 +1,7 @@
 use crate::command::Command;
 use crate::command_parser::parse;
 use crate::server::MESSAGE_MAX_SIZE;
+use log::debug;
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
 use std::io::Result;
@@ -29,7 +30,8 @@ impl Wal {
         let mut file = self.file.lock().unwrap();
         let len = file.read(&mut buf).unwrap();
 
-        let i = buf.iter().position(|&c| c == b'\r').unwrap();
+        let i = buf.iter().position(|&c| c == b'\r')?;
+        debug!("{}", String::from_utf8(buf[0..i].to_vec()).unwrap());
         file.seek(std::io::SeekFrom::Current(i as i64 + 2 - len as i64))
             .unwrap();
 
