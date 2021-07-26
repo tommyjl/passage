@@ -1,9 +1,13 @@
+use passage::default_env;
 use passage::server::{Server, ServerOptions};
 use passage::thread_pool::*;
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    default_env!("RUST_BACKTRACE", "1");
+    default_env!("RUST_LOG", "trace");
     env_logger::init();
+
     let options = ServerOptions {
         thread_count: 2,
         backlog: 128,
