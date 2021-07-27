@@ -2,13 +2,14 @@ use crate::command::Command;
 use crate::db::{Database, HashMapDatabase};
 use crate::thread_pool::ThreadPool;
 use crate::wal::Wal;
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use socket2::{Domain, Socket, Type};
 use std::error::Error;
 use std::io;
 use std::io::prelude::*;
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
+use std::time::Instant;
 
 pub const MESSAGE_MAX_SIZE: usize = 512;
 
@@ -48,11 +49,13 @@ impl ServerOptions {
 
 impl<P: ThreadPool> Server<P> {
     pub fn new(options: ServerOptions, pool: P) -> Self {
+        let time = Instant::now();
         let db: Arc<dyn Database> = Arc::new(HashMapDatabase::new());
         let wal = Arc::new(Wal::new().unwrap());
         while let Some(cmd) = wal.read() {
             let _response = handle_command(cmd, &db);
         }
+        trace!("Server init took {} ms", time.elapsed().as_millis());
         Self {
             opt: options,
             pool,
@@ -95,22 +98,31 @@ impl<P: ThreadPool> Server<P> {
 
 fn handle_client(mut stream: TcpStream, db: Arc<dyn Database>, wal: Arc<Wal>) {
     let mut buf = [0; MESSAGE_MAX_SIZE];
-    let len = stream.read(&mut buf).unwrap();
-
-    match Command::parse(&buf[0..len]) {
-        Ok(cmd) => {
-            info!("Incoming command: {:?}", cmd);
-            wal.append(&cmd).unwrap();
-            let response = handle_command(cmd, &db);
-            if let Err(error) = stream.write(&response) {
-                warn!("Write: {}", error);
-            }
+    loop {
+        let len = stream.read(&mut buf).unwrap();
+        if len == 0 {
+            break;
         }
-        Err(error) => error!("{}", error),
+
+        match Command::parse(&buf[0..len]) {
+            Ok(cmd) => {
+                info!("Incoming command: {:?}", cmd);
+                wal.append(&cmd).unwrap();
+                let response = handle_command(cmd, &db);
+                if let Err(error) = stream.write(&response) {
+                    warn!("Write: {}", error);
+                }
+            }
+            Err(error) => error!("{}", error),
+        }
     }
 
     if let Err(error) = stream.shutdown(Shutdown::Both) {
-        warn!("Shutdown: {}", error);
+        let kind = error.kind();
+        debug!("Shutdown: ErrorKind::{:?}", kind);
+        if kind != io::ErrorKind::NotConnected {
+            error!("Shutdown: {}", error);
+        }
     }
 }
 

@@ -29,13 +29,11 @@ impl std::fmt::Display for BenchKind {
     }
 }
 
-fn bench_get() {
-    let mut client = Client::new("127.0.0.1:12345");
+fn bench_get(client: &mut Client) {
     let _ = client.get("drink".to_string());
 }
 
-fn bench_set() {
-    let mut client = Client::new("127.0.0.1:12345");
+fn bench_set(client: &mut Client) {
     let _ = client.set("drink".to_string(), "water".to_string());
 }
 
@@ -50,8 +48,9 @@ fn main() {
     };
 
     let time = Instant::now();
+    let mut client = Client::new("127.0.0.1:12345");
     for _ in 0..opts.requests {
-        bench_fn();
+        bench_fn(&mut client);
     }
     let elapsed = time.elapsed().as_millis();
 
