@@ -135,7 +135,7 @@ fn handle_command(cmd: Command, db: &Arc<dyn Database>) -> Vec<u8> {
                     .as_bytes()
                     .to_owned()
             })
-            .unwrap_or(b"Err: Not found\r\n".to_vec()),
+            .unwrap_or_else(|| b"Err: Not found\r\n".to_vec()),
         Command::Set(key, value) => db
             .set(key.into(), value.into())
             .map(|v| {
@@ -143,7 +143,7 @@ fn handle_command(cmd: Command, db: &Arc<dyn Database>) -> Vec<u8> {
                     .as_bytes()
                     .to_owned()
             })
-            .unwrap_or(b"Err: Not found\r\n".to_vec()),
+            .unwrap_or_else(|| b"Err: Not found\r\n".to_vec()),
         Command::Remove(key) => db
             .remove(key.into())
             .map(|v| {
@@ -151,6 +151,6 @@ fn handle_command(cmd: Command, db: &Arc<dyn Database>) -> Vec<u8> {
                     .as_bytes()
                     .to_owned()
             })
-            .unwrap_or(b"Err: Not found\r\n".to_vec()),
+            .unwrap_or_else(|| b"Err: Not found\r\n".to_vec()),
     }
 }

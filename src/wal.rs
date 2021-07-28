@@ -45,10 +45,10 @@ impl Wal {
                 let mut buf = String::new();
                 buf.push_str("set ");
                 buf.push_str(key);
-                buf.push_str(" ");
+                buf.push(' ');
                 buf.push_str(value);
                 buf.push_str("\r\n");
-                f.write(buf.as_bytes())?;
+                f.write_all(buf.as_bytes())?;
             }
             Command::Remove(key) => {
                 let mut f = self.file.lock().unwrap();
@@ -56,7 +56,7 @@ impl Wal {
                 buf.push_str("remove ");
                 buf.push_str(key);
                 buf.push_str("\r\n");
-                f.write(buf.as_bytes())?;
+                f.write_all(buf.as_bytes())?;
             }
             _ => {}
         }
