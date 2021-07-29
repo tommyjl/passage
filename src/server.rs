@@ -67,10 +67,8 @@ impl<P: ThreadPool> Server<P> {
     pub fn run(&self) -> Result<(), Box<dyn Error>> {
         let address: SocketAddr = format!("0.0.0.0:{}", self.opt.port).parse()?;
         let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
-
-        socket.bind(&address.into())?;
-
         self.opt.set_sockopts(&socket)?;
+        socket.bind(&address.into())?;
 
         socket.listen(self.opt.backlog)?;
         trace!("Listening on {}:{}", address.ip(), address.port());
