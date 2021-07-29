@@ -16,7 +16,7 @@ impl Client {
     }
 
     pub fn get(&mut self, key: String) -> Vec<u8> {
-        let msg = format!("get {}\r\n", key);
+        let msg = format!("*2\r\n+get\r\n+{}\r\n", key);
         let _len = self.conn.write(msg.as_bytes()).unwrap();
 
         let mut buf = [0; MESSAGE_MAX_SIZE];
@@ -26,7 +26,7 @@ impl Client {
     }
 
     pub fn set(&mut self, key: String, value: String) -> Vec<u8> {
-        let msg = format!("set {} {}\r\n", key, value);
+        let msg = format!("*3\r\n+set\r\n+{}\r\n+{}\r\n", key, value);
         let _len = self.conn.write(msg.as_bytes()).unwrap();
 
         let mut buf = [0; MESSAGE_MAX_SIZE];
@@ -36,7 +36,7 @@ impl Client {
     }
 
     pub fn remove(&mut self, key: String) -> Vec<u8> {
-        let msg = format!("remove {}\r\n", key);
+        let msg = format!("*2\r\n+remove\r\n+{}\r\n", key);
         let _len = self.conn.write(msg.as_bytes()).unwrap();
 
         let mut buf = [0; MESSAGE_MAX_SIZE];

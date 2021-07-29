@@ -1,9 +1,11 @@
 use crate::command::Command;
 use crate::db::{Database, HashMapDatabase};
+use crate::objects::{parse, Object};
 use crate::thread_pool::ThreadPool;
 use crate::wal::Wal;
 use log::{debug, error, info, trace, warn};
 use socket2::{Domain, Socket, Type};
+use std::convert::TryFrom;
 use std::error::Error;
 use std::io;
 use std::io::prelude::*;
@@ -97,21 +99,43 @@ impl<P: ThreadPool> Server<P> {
 fn handle_client(mut stream: TcpStream, db: Arc<dyn Database>, wal: Arc<Wal>) {
     let mut buf = [0; MESSAGE_MAX_SIZE];
     loop {
-        let len = stream.read(&mut buf).unwrap();
-        if len == 0 {
-            break;
-        }
-
-        match Command::parse(&buf[0..len]) {
-            Ok(cmd) => {
-                info!("Incoming command: {:?}", cmd);
-                wal.append(&cmd).unwrap();
-                let response = handle_command(cmd, &db);
-                if let Err(error) = stream.write(&response) {
-                    warn!("Write: {}", error);
-                }
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Err(err) => {
+                error!("TcpStream error: {}", err);
+                break;
             }
-            Err(error) => error!("{}", error),
+            _ => (),
+        };
+
+        let mut cursor = io::Cursor::new(&buf[..]);
+        let object = match parse(&mut cursor) {
+            Ok(o) => o,
+            Err(err) => {
+                error!("Parse error: {}", err);
+                break;
+            }
+        };
+
+        let cmd = match object {
+            Object::Array(vec) => match Command::try_from(vec) {
+                Ok(cmd) => cmd,
+                Err(err) => {
+                    error!("Invalid command: {}", err);
+                    break;
+                }
+            },
+            _ => {
+                error!("Invalid command");
+                break;
+            }
+        };
+
+        info!("Incoming command: {:?}", cmd);
+        wal.append(&cmd).unwrap();
+        let response = handle_command(cmd, &db);
+        if let Err(error) = stream.write(&response) {
+            warn!("Write: {}", error);
         }
     }
 
