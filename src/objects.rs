@@ -91,18 +91,29 @@ fn read_array(input: &mut Cursor<&[u8]>) -> Result<Vec<Object>> {
 }
 
 fn read_integer(input: &mut Cursor<&[u8]>) -> Result<i64> {
+    let sign = if peek(input)? == b'-' {
+        advance(input);
+        -1
+    } else {
+        1
+    };
+
     let start = input.position() as usize;
     let mut end = start;
+
     while is_digit(peek(input)?) {
         advance(input);
         end += 1;
     }
+
     if start == end {
         Err(Error::InvalidInput)
     } else {
-        let s = String::from_utf8(input.get_ref()[start..end].into())?;
-        let int = s.parse::<i64>().unwrap();
-        Ok(int)
+        let int = input.get_ref()[start..end]
+            .iter()
+            .map(|b| b & 0xF)
+            .fold(0i64, |acc, b| acc * 10 + (b & 0xF) as i64);
+        Ok(sign * int)
     }
 }
 
@@ -201,13 +212,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_integer_ok() {
+    fn parse_integer_positive_ok() {
         let bytes: &[u8] = b":1234567890\r\n";
         let mut cursor = Cursor::new(bytes);
         let o = parse(&mut cursor).unwrap();
         assert!(matches!(o, Object::Integer(_)));
         if let Object::Integer(int) = o {
             assert_eq!(int, 1234567890);
+        }
+    }
+
+    #[test]
+    fn parse_integer_negative_ok() {
+        let bytes: &[u8] = b":-1234567890\r\n";
+        let mut cursor = Cursor::new(bytes);
+        let o = parse(&mut cursor).unwrap();
+        assert!(matches!(o, Object::Integer(_)));
+        if let Object::Integer(int) = o {
+            assert_eq!(int, -1234567890);
         }
     }
 
