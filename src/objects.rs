@@ -43,6 +43,7 @@ pub enum Object {
     SimpleString(String),
     Error(String),
     Integer(i64),
+    BulkString(Option<String>),
 }
 
 #[allow(dead_code)]
@@ -56,6 +57,7 @@ pub fn parse(input: &mut Cursor<&[u8]>) -> Result<Object> {
         b'-' => Ok(Object::Error(read_simple(input)?)),
         b':' => Ok(Object::Integer(read_integer(input)?)),
         b'*' => Ok(Object::Array(read_array(input)?)),
+        b'$' => Ok(Object::BulkString(read_bulk(input)?)),
         _ => Err(Error::InvalidInput),
     }
 }
@@ -75,6 +77,10 @@ fn peek(input: &mut Cursor<&[u8]>) -> Result<u8> {
 
 fn advance(input: &mut Cursor<&[u8]>) {
     input.set_position(input.position() + 1);
+}
+
+fn advance_by(amount: u64, input: &mut Cursor<&[u8]>) {
+    input.set_position(input.position() + amount);
 }
 
 fn read_array(input: &mut Cursor<&[u8]>) -> Result<Vec<Object>> {
@@ -133,9 +139,13 @@ fn read_crlf(input: &mut Cursor<&[u8]>) -> Result<()> {
 }
 
 fn has_remaining(input: &Cursor<&[u8]>) -> bool {
+    remaining(input) > 0
+}
+
+fn remaining(input: &Cursor<&[u8]>) -> usize {
     let size = input.get_ref().len();
     let remaining = size - input.position() as usize;
-    remaining > 0
+    remaining
 }
 
 // TODO: UTF-8
@@ -149,6 +159,31 @@ fn read_simple(input: &mut Cursor<&[u8]>) -> Result<String> {
 
     let s = String::from_utf8(input.get_ref()[start..end].into())?;
     Ok(s)
+}
+
+fn read_bulk(input: &mut Cursor<&[u8]>) -> Result<Option<String>> {
+    let size = read_integer(input)?;
+    read_crlf(input)?;
+
+    if size == -1 {
+        Ok(None)
+    } else if size >= 0 {
+        let size = size as usize;
+        if remaining(input) < size {
+            Err(Error::Incomplete)
+        } else {
+            let start = input.position() as usize;
+            let end = start + size;
+
+            advance_by(size as u64, input);
+            read_crlf(input)?;
+
+            let s = String::from_utf8(input.get_ref()[start..end].into()).unwrap();
+            Ok(Some(s))
+        }
+    } else {
+        Err(Error::InvalidInput)
+    }
 }
 
 fn is_simple_string_char(input: u8) -> bool {
@@ -244,5 +279,24 @@ mod tests {
             assert!(matches!(a[0], Object::SimpleString(_)));
             assert!(matches!(a[1], Object::SimpleString(_)));
         }
+    }
+
+    #[test]
+    fn parse_bulk_some_ok() {
+        let bytes: &[u8] = b"$11\r\nHello world\r\n";
+        let mut cursor = Cursor::new(bytes);
+        let o = parse(&mut cursor).unwrap();
+        assert!(matches!(o, Object::BulkString(_)));
+        if let Object::BulkString(Some(s)) = o {
+            assert_eq!(s, "Hello world".to_string());
+        }
+    }
+
+    #[test]
+    fn parse_bulk_none_ok() {
+        let bytes: &[u8] = b"$-1\r\n";
+        let mut cursor = Cursor::new(bytes);
+        let o = parse(&mut cursor).unwrap();
+        assert!(matches!(o, Object::BulkString(None)));
     }
 }
