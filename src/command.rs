@@ -8,6 +8,18 @@ pub enum Command {
     Remove(String),
 }
 
+impl TryFrom<Object> for Command {
+    type Error = String;
+
+    fn try_from(obj: Object) -> Result<Self, Self::Error> {
+        if let Object::Array(vec) = obj {
+            Command::try_from(vec)
+        } else {
+            Err("Object is not a valid Command".to_string())
+        }
+    }
+}
+
 impl TryFrom<Vec<Object>> for Command {
     type Error = String;
 
@@ -32,6 +44,7 @@ impl TryFrom<Vec<Object>> for Command {
 fn get_string(obj: &Object) -> Result<String, String> {
     match obj {
         Object::SimpleString(ref s) => Ok(s.clone()),
+        Object::BulkString(Some(ref s)) => Ok(s.clone()),
         _ => Err("Unsupported type".to_string()),
     }
 }

@@ -38,6 +38,7 @@ impl From<FromUtf8Error> for Error {
     }
 }
 
+#[derive(Debug)]
 pub enum Object {
     Array(Vec<Object>),
     SimpleString(String),
@@ -46,7 +47,6 @@ pub enum Object {
     BulkString(Option<String>),
 }
 
-#[allow(dead_code)]
 pub fn parse(input: &mut Cursor<&[u8]>) -> Result<Object> {
     if input.get_ref().is_empty() {
         return Err(Error::Incomplete);

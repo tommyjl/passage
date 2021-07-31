@@ -1,10 +1,10 @@
 use crate::command::Command;
-use crate::command_parser::parse;
+use crate::objects::parse;
 use crate::server::MESSAGE_MAX_SIZE;
-use log::debug;
+use std::convert::TryFrom;
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
-use std::io::Result;
+use std::io::{Cursor, Result};
 use std::sync::Mutex;
 
 pub struct Wal {
@@ -28,34 +28,34 @@ impl Wal {
         let mut buf: [u8; MESSAGE_MAX_SIZE] = [0; MESSAGE_MAX_SIZE];
 
         let mut file = self.file.lock().unwrap();
-        let len = file.read(&mut buf).unwrap();
+        let len = file.read(&mut buf).unwrap() as i64;
 
-        let i = buf.iter().position(|&c| c == b'\r')?;
-        debug!("{}", String::from_utf8(buf[0..i].to_vec()).unwrap());
-        file.seek(std::io::SeekFrom::Current(i as i64 + 2 - len as i64))
-            .unwrap();
+        let mut cursor = Cursor::new(&buf[..]);
+        let ret = parse(&mut cursor)
+            .ok()
+            .and_then(|o| Command::try_from(o).ok());
 
-        parse(&buf[0..len]).ok()
+        let pos = cursor.position() as i64;
+        file.seek(std::io::SeekFrom::Current(pos - len)).unwrap();
+
+        ret
     }
 
     pub fn append(&self, cmd: &Command) -> Result<()> {
         match cmd {
             Command::Set(key, value) => {
+                let buf = format!(
+                    "*3\r\n+set\r\n+{}\r\n${}\r\n{}\r\n",
+                    key,
+                    value.len(),
+                    value
+                );
                 let mut f = self.file.lock().unwrap();
-                let mut buf = String::new();
-                buf.push_str("set ");
-                buf.push_str(key);
-                buf.push(' ');
-                buf.push_str(value);
-                buf.push_str("\r\n");
                 f.write_all(buf.as_bytes())?;
             }
             Command::Remove(key) => {
+                let buf = format!("*2\r\n+remove\r\n+{}\r\n", key);
                 let mut f = self.file.lock().unwrap();
-                let mut buf = String::new();
-                buf.push_str("remove ");
-                buf.push_str(key);
-                buf.push_str("\r\n");
                 f.write_all(buf.as_bytes())?;
             }
             _ => {}

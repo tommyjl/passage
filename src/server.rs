@@ -1,6 +1,6 @@
 use crate::command::Command;
 use crate::db::{Database, HashMapDatabase};
-use crate::objects::{parse, Object};
+use crate::objects::parse;
 use crate::thread_pool::ThreadPool;
 use crate::wal::Wal;
 use log::{debug, error, info, trace, warn};
@@ -55,6 +55,7 @@ impl<P: ThreadPool> Server<P> {
         let db: Arc<dyn Database> = Arc::new(HashMapDatabase::new());
         let wal = Arc::new(Wal::new().unwrap());
         while let Some(cmd) = wal.read() {
+            trace!("Replaying cmd = {:?}", cmd);
             let _response = handle_command(cmd, &db);
         }
         trace!("Server init took {} ms", time.elapsed().as_millis());
@@ -117,16 +118,10 @@ fn handle_client(mut stream: TcpStream, db: Arc<dyn Database>, wal: Arc<Wal>) {
             }
         };
 
-        let cmd = match object {
-            Object::Array(vec) => match Command::try_from(vec) {
-                Ok(cmd) => cmd,
-                Err(err) => {
-                    error!("Invalid command: {}", err);
-                    break;
-                }
-            },
-            _ => {
-                error!("Invalid command");
+        let cmd = match Command::try_from(object) {
+            Ok(o) => o,
+            Err(err) => {
+                error!("Invalid command: {}", err);
                 break;
             }
         };
