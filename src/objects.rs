@@ -144,8 +144,7 @@ fn has_remaining(input: &Cursor<&[u8]>) -> bool {
 
 fn remaining(input: &Cursor<&[u8]>) -> usize {
     let size = input.get_ref().len();
-    let remaining = size - input.position() as usize;
-    remaining
+    size - input.position() as usize
 }
 
 // TODO: UTF-8

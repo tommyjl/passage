@@ -1,5 +1,4 @@
 mod command;
-mod command_parser;
 mod objects;
 mod wal;
 
