@@ -1,10 +1,12 @@
 use crate::command::Command;
 use crate::objects::parse;
 use crate::server::MESSAGE_MAX_SIZE;
+use nix::unistd::fsync;
 use std::convert::TryFrom;
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
 use std::io::{Cursor, Result};
+use std::os::unix::io::AsRawFd;
 use std::sync::Mutex;
 
 pub struct Wal {
@@ -52,11 +54,15 @@ impl Wal {
                 );
                 let mut f = self.file.lock().unwrap();
                 f.write_all(buf.as_bytes())?;
+                f.flush()?;
+                fsync(f.as_raw_fd())?;
             }
             Command::Remove(key) => {
                 let buf = format!("*2\r\n+remove\r\n+{}\r\n", key);
                 let mut f = self.file.lock().unwrap();
                 f.write_all(buf.as_bytes())?;
+                f.flush()?;
+                fsync(f.as_raw_fd())?;
             }
             _ => {}
         }
