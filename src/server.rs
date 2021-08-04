@@ -50,10 +50,9 @@ impl ServerOptions {
 }
 
 impl<P: ThreadPool> Server<P> {
-    pub fn new(options: ServerOptions, pool: P) -> Self {
+    pub fn new(options: ServerOptions, pool: P, wal: Arc<Wal>) -> Self {
         let time = Instant::now();
         let db: Arc<dyn Database> = Arc::new(HashMapDatabase::new());
-        let wal = Arc::new(Wal::new().unwrap());
         while let Some(cmd) = wal.read() {
             trace!("Replaying cmd = {:?}", cmd);
             let _response = handle_command(cmd, &db);

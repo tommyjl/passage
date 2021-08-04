@@ -10,11 +10,12 @@ use std::os::unix::io::AsRawFd;
 use std::sync::Mutex;
 
 pub struct Wal {
+    fsync: bool,
     file: Mutex<File>,
 }
 
 impl Wal {
-    pub fn new() -> Result<Self> {
+    pub fn new(fsync: bool) -> Result<Self> {
         let path = "./wal.txt";
         let file = Mutex::new(
             OpenOptions::new()
@@ -23,7 +24,7 @@ impl Wal {
                 .append(true)
                 .open(path)?,
         );
-        Ok(Self { file })
+        Ok(Self { fsync, file })
     }
 
     pub fn read(&self) -> Option<Command> {
@@ -44,28 +45,23 @@ impl Wal {
     }
 
     pub fn append(&self, cmd: &Command) -> Result<()> {
-        match cmd {
-            Command::Set(key, value) => {
-                let buf = format!(
-                    "*3\r\n+set\r\n+{}\r\n${}\r\n{}\r\n",
-                    key,
-                    value.len(),
-                    value
-                );
-                let mut f = self.file.lock().unwrap();
-                f.write_all(buf.as_bytes())?;
+        if let Some(buf) = match cmd {
+            Command::Set(key, value) => Some(format!(
+                "*3\r\n+set\r\n+{}\r\n${}\r\n{}\r\n",
+                key,
+                value.len(),
+                value
+            )),
+            Command::Remove(key) => Some(format!("*2\r\n+remove\r\n+{}\r\n", key)),
+            _ => None,
+        } {
+            let mut f = self.file.lock().unwrap();
+            f.write_all(buf.as_bytes())?;
+            if self.fsync {
                 f.flush()?;
                 fsync(f.as_raw_fd())?;
             }
-            Command::Remove(key) => {
-                let buf = format!("*2\r\n+remove\r\n+{}\r\n", key);
-                let mut f = self.file.lock().unwrap();
-                f.write_all(buf.as_bytes())?;
-                f.flush()?;
-                fsync(f.as_raw_fd())?;
-            }
-            _ => {}
-        }
+        };
         Ok(())
     }
 }
