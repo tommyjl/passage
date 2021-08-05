@@ -1,5 +1,5 @@
 use crate::command::Command;
-use crate::objects::parse;
+use crate::object::parse;
 use crate::server::MESSAGE_MAX_SIZE;
 use nix::unistd::fsync;
 use std::convert::TryFrom;

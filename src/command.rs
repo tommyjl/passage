@@ -1,4 +1,4 @@
-use crate::objects::Object;
+use crate::object::Object;
 use std::convert::TryFrom;
 
 #[derive(Debug)]

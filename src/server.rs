@@ -1,6 +1,6 @@
 use crate::command::Command;
 use crate::db::{Database, HashMapDatabase};
-use crate::objects::parse;
+use crate::object::parse;
 use crate::thread_pool::ThreadPool;
 use crate::wal::Wal;
 use log::{debug, error, info, trace, warn};
