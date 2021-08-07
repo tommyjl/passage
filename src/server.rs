@@ -3,7 +3,7 @@ use crate::db::{Database, HashMapDatabase};
 use crate::object::parse;
 use crate::thread_pool::ThreadPool;
 use crate::wal::Wal;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, trace};
 use socket2::{Domain, Socket, Type};
 use std::convert::TryFrom;
 use std::error::Error;
@@ -55,7 +55,7 @@ impl<P: ThreadPool> Server<P> {
         let db: Arc<dyn Database> = Arc::new(HashMapDatabase::new());
         while let Some(cmd) = wal.read() {
             trace!("Replaying cmd = {:?}", cmd);
-            let _response = handle_command(cmd, &db);
+            let _response = db.execute(cmd);
         }
         trace!("Server init took {} ms", time.elapsed().as_millis());
         Self {
@@ -127,9 +127,9 @@ fn handle_client(mut stream: TcpStream, db: Arc<dyn Database>, wal: Arc<Wal>) {
 
         info!("Incoming command: {:?}", cmd);
         wal.append(&cmd).unwrap();
-        let response = handle_command(cmd, &db);
+        let response: Vec<u8> = db.execute(cmd).unwrap().into();
         if let Err(error) = stream.write(&response) {
-            warn!("Write: {}", error);
+            error!("Write: {}", error);
         }
     }
 
@@ -139,34 +139,5 @@ fn handle_client(mut stream: TcpStream, db: Arc<dyn Database>, wal: Arc<Wal>) {
         if kind != io::ErrorKind::NotConnected {
             error!("Shutdown: {}", error);
         }
-    }
-}
-
-fn handle_command(cmd: Command, db: &Arc<dyn Database>) -> Vec<u8> {
-    match cmd {
-        Command::Get(key) => db
-            .get(key.into())
-            .map(|v| {
-                format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
-                    .as_bytes()
-                    .to_owned()
-            })
-            .unwrap_or_else(|| b"Err: Not found\r\n".to_vec()),
-        Command::Set(key, value) => db
-            .set(key.into(), value.into())
-            .map(|v| {
-                format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
-                    .as_bytes()
-                    .to_owned()
-            })
-            .unwrap_or_else(|| b"Err: Not found\r\n".to_vec()),
-        Command::Remove(key) => db
-            .remove(key.into())
-            .map(|v| {
-                format!("Ok: {}\r\n", String::from_utf8(v).unwrap())
-                    .as_bytes()
-                    .to_owned()
-            })
-            .unwrap_or_else(|| b"Err: Not found\r\n".to_vec()),
     }
 }

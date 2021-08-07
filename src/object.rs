@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::io::prelude::*;
 use std::io::Cursor;
@@ -38,13 +39,60 @@ impl From<FromUtf8Error> for Error {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Object {
     Array(Vec<Object>),
     SimpleString(String),
     Error(String),
     Integer(i64),
     BulkString(Option<String>),
+}
+
+impl Into<Vec<u8>> for Object {
+    fn into(self) -> Vec<u8> {
+        let mut ret: Vec<u8> = Vec::new();
+
+        let mut queue: VecDeque<&Object> = VecDeque::new();
+        queue.push_back(&self);
+
+        while let Some(o) = queue.pop_front() {
+            match o {
+                Object::Array(inner) => {
+                    ret.push(b'*');
+                    ret.extend(inner.len().to_string().as_bytes());
+                    ret.extend(b"\r\n");
+
+                    for inner_o in inner.iter() {
+                        queue.push_back(inner_o);
+                    }
+                }
+                Object::SimpleString(value) => {
+                    ret.push(b'+');
+                    ret.extend(value.as_bytes());
+                    ret.extend(b"\r\n");
+                }
+                Object::Error(value) => {
+                    ret.push(b'-');
+                    ret.extend(value.as_bytes());
+                    ret.extend(b"\r\n");
+                }
+                Object::Integer(int) => {
+                    ret.push(b':');
+                    ret.extend(int.to_string().as_bytes());
+                    ret.extend(b"\r\n");
+                }
+                Object::BulkString(Some(value)) => {
+                    ret.push(b'$');
+                    ret.extend(value.len().to_string().as_bytes());
+                    ret.extend(b"\r\n");
+                    ret.extend(value.as_bytes());
+                    ret.extend(b"\r\n");
+                }
+                Object::BulkString(None) => ret.extend(b"$-1\r\n"),
+            }
+        }
+        ret
+    }
 }
 
 pub fn parse(input: &mut Cursor<&[u8]>) -> Result<Object> {
@@ -297,5 +345,54 @@ mod tests {
         let mut cursor = Cursor::new(bytes);
         let o = parse(&mut cursor).unwrap();
         assert!(matches!(o, Object::BulkString(None)));
+    }
+
+    #[test]
+    fn object_into_vec_simple_string() {
+        let obj = Object::SimpleString("OK".to_string());
+        let bytes: Vec<u8> = obj.into();
+        assert_eq!(String::from_utf8(bytes).unwrap(), "+OK\r\n");
+    }
+
+    #[test]
+    fn object_into_vec_error() {
+        let obj = Object::Error("ERR".to_string());
+        let bytes: Vec<u8> = obj.into();
+        assert_eq!(String::from_utf8(bytes).unwrap(), "-ERR\r\n");
+    }
+
+    #[test]
+    fn object_into_vec_integer() {
+        let obj = Object::Integer(313);
+        let bytes: Vec<u8> = obj.into();
+        assert_eq!(String::from_utf8(bytes).unwrap(), ":313\r\n");
+    }
+
+    #[test]
+    fn object_into_vec_bulk_string() {
+        let obj = Object::BulkString(None);
+        let bytes: Vec<u8> = obj.into();
+        assert_eq!(String::from_utf8(bytes).unwrap(), "$-1\r\n");
+
+        let obj = Object::BulkString(Some("".to_string()));
+        let bytes: Vec<u8> = obj.into();
+        assert_eq!(String::from_utf8(bytes).unwrap(), "$0\r\n\r\n");
+
+        let obj = Object::BulkString(Some("Test".to_string()));
+        let bytes: Vec<u8> = obj.into();
+        assert_eq!(String::from_utf8(bytes).unwrap(), "$4\r\nTest\r\n");
+    }
+
+    #[test]
+    fn object_into_vec_array() {
+        let mut inner = Vec::new();
+        inner.push(Object::SimpleString("First".to_string()));
+        inner.push(Object::SimpleString("Second".to_string()));
+        let obj = Object::Array(inner);
+        let bytes: Vec<u8> = obj.into();
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            "*2\r\n+First\r\n+Second\r\n"
+        );
     }
 }
