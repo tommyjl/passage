@@ -39,7 +39,7 @@ impl From<FromUtf8Error> for Error {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Object {
     Array(Vec<Object>),
     SimpleString(String),
