@@ -15,8 +15,7 @@ pub struct Wal {
 }
 
 impl Wal {
-    pub fn new(fsync: bool) -> Result<Self> {
-        let path = "./wal.txt";
+    pub fn new(path: &str, fsync: bool) -> Result<Self> {
         let file = Mutex::new(
             OpenOptions::new()
                 .create(true)

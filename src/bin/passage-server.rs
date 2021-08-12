@@ -9,6 +9,9 @@ use std::sync::Arc;
 #[derive(Clap)]
 #[clap(version = crate_version!(), author = crate_authors!())]
 struct Opts {
+    #[clap(long, default_value = "wal.txt")]
+    log_file: String,
+
     #[clap(long)]
     fsync: bool,
 
@@ -33,6 +36,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         nodelay: true,
     };
     let pool = ReceiverThreadPool::new(options.thread_count);
-    let wal = Arc::new(Wal::new(opts.fsync).unwrap());
+    let wal = Arc::new(Wal::new(&opts.log_file, opts.fsync).unwrap());
     Server::new(options, pool, wal).run()
 }
