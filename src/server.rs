@@ -4,12 +4,14 @@ use crate::object::parse;
 use crate::thread_pool::ThreadPool;
 use crate::wal::Wal;
 use log::{debug, error, info, trace};
+use nix::poll::{poll, PollFd, PollFlags};
 use socket2::{Domain, Socket, Type};
 use std::convert::TryFrom;
 use std::error::Error;
 use std::io;
 use std::io::prelude::*;
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -75,24 +77,38 @@ impl<P: ThreadPool> Server<P> {
         socket.listen(self.opt.backlog)?;
         trace!("Listening on {}:{}", address.ip(), address.port());
 
-        let listener: TcpListener = socket.into();
-        for stream in listener.incoming() {
-            let stream = stream?;
+        let mut pollfds = vec![PollFd::new(socket.as_raw_fd(), PollFlags::POLLIN)];
 
-            let stream: Socket = stream.into();
-            self.opt.set_sockopts(&stream)?;
+        loop {
+            let count = poll(&mut pollfds, -1)?;
+            if count == 0 {
+                continue;
+            } else if count < 0 {
+                error!("Poll returned {}", count);
+                std::process::exit(1);
+            }
 
-            self.pool
-                .execute({
-                    let stream: TcpStream = stream.into();
-                    let db = self.db.clone();
-                    let wal = self.wal.clone();
-                    move || handle_client(stream, db, wal)
-                })
-                .unwrap();
+            match pollfds[0].revents() {
+                None => error!("No revents???"),
+                Some(flags) => {
+                    if !flags.intersects(PollFlags::POLLIN) {
+                        error!("UNEXPECTED FLAG: {:?}", flags);
+                    }
+
+                    let (stream, _addr) = socket.accept()?;
+                    self.opt.set_sockopts(&stream)?;
+
+                    self.pool
+                        .execute({
+                            let stream: TcpStream = stream.into();
+                            let db = self.db.clone();
+                            let wal = self.wal.clone();
+                            move || handle_client(stream, db, wal)
+                        })
+                        .unwrap();
+                }
+            }
         }
-
-        Ok(())
     }
 }
 
