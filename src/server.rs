@@ -73,87 +73,114 @@ impl<P: ThreadPool> Server<P> {
         let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
         self.opt.set_sockopts(&socket)?;
         socket.bind(&address.into())?;
-
         socket.listen(self.opt.backlog)?;
         trace!("Listening on {}:{}", address.ip(), address.port());
 
+        // The elements of the same index of pollfds and sockets should always correspond to the
+        // same file descriptor. This is not ideal, but nix::poll::PollFd does not expose the fd.
         let mut pollfds = vec![PollFd::new(socket.as_raw_fd(), PollFlags::POLLIN)];
+        let mut sockets = vec![socket];
+        let mut cleanup_ids: Vec<usize> = Vec::new();
 
         loop {
-            let count = poll(&mut pollfds, -1)?;
-            if count == 0 {
-                continue;
-            } else if count < 0 {
+            trace!("pollfds.len() = {}", pollfds.len());
+            trace!("sockets.len() = {}", sockets.len());
+
+            let mut count = poll(&mut pollfds, -1)?;
+            if count < 0 {
                 error!("Poll returned {}", count);
                 std::process::exit(1);
             }
 
-            match pollfds[0].revents() {
-                None => error!("No revents???"),
-                Some(flags) => {
-                    if !flags.intersects(PollFlags::POLLIN) {
-                        error!("UNEXPECTED FLAG: {:?}", flags);
+            for i in 0..pollfds.len() {
+                if count == 0 {
+                    continue;
+                }
+
+                let pollfd = &pollfds[i];
+                let socket = &mut sockets[i];
+
+                if let Some(flags) = pollfd.revents() {
+                    if flags.is_empty() {
+                        continue;
                     }
 
-                    let (stream, _addr) = socket.accept()?;
-                    self.opt.set_sockopts(&stream)?;
+                    count -= 1;
 
-                    self.pool
-                        .execute({
-                            let stream: TcpStream = stream.into();
-                            let db = self.db.clone();
-                            let wal = self.wal.clone();
-                            move || handle_client(stream, db, wal)
-                        })
-                        .unwrap();
+                    if i == 0 {
+                        if !flags.intersects(PollFlags::POLLIN) {
+                            error!("Invalid flag");
+                            std::process::exit(1);
+                        }
+
+                        let (stream, _addr) = socket.accept()?;
+                        self.opt.set_sockopts(&stream)?;
+
+                        pollfds.push(PollFd::new(
+                            stream.as_raw_fd(),
+                            PollFlags::POLLIN | PollFlags::POLLOUT,
+                        ));
+                        sockets.push(stream);
+                        trace!("Accepted connection");
+                    } else {
+                        if flags.intersects(PollFlags::POLLHUP) {
+                            trace!("POLLHUP");
+                            cleanup_ids.push(i);
+                            continue;
+                        }
+
+                        if flags.intersects(PollFlags::POLLIN) {
+                            // TODO: peek and only read as much as needed to support multiple
+                            // reads on the same connection?
+                            let mut buf = [0; MESSAGE_MAX_SIZE];
+                            let size = socket.read(&mut buf)?;
+                            if size == 0 {
+                                // TODO: Why do we keep landing here after the initial read?
+                                // debug!("read {} bytes", size);
+                                continue;
+                            }
+
+                            let mut cursor = io::Cursor::new(&buf[..]);
+                            let object = match parse(&mut cursor) {
+                                Ok(o) => o,
+                                Err(err) => {
+                                    error!("Parse error: {}", err);
+                                    break;
+                                }
+                            };
+
+                            let cmd = match Command::try_from(object) {
+                                Ok(o) => o,
+                                Err(err) => {
+                                    error!("Invalid command: {}", err);
+                                    break;
+                                }
+                            };
+
+                            info!("Incoming command: {:?}", cmd);
+                            self.wal.append(&cmd).unwrap();
+                            let response: Vec<u8> = self.db.execute(cmd).unwrap().into();
+                            if let Err(error) = socket.write(&response) {
+                                error!("Write: {}", error);
+                            }
+
+                            // socket.shutdown(Shutdown::Both)?;
+                            cleanup_ids.push(i);
+
+                            // std::process::exit(1);
+                        }
+
+                        if flags.intersects(PollFlags::POLLOUT) {
+                            // TODO: Handle write
+                            // debug!("POLLOUT");
+                        }
+                    }
                 }
             }
-        }
-    }
-}
-
-fn handle_client(mut stream: TcpStream, db: Arc<dyn Database>, wal: Arc<Wal>) {
-    let mut buf = [0; MESSAGE_MAX_SIZE];
-    loop {
-        match stream.read(&mut buf) {
-            Ok(0) => break,
-            Err(err) => {
-                error!("TcpStream error: {}", err);
-                break;
+            while let Some(i) = cleanup_ids.pop() {
+                pollfds.remove(i);
+                sockets.remove(i);
             }
-            _ => (),
-        };
-
-        let mut cursor = io::Cursor::new(&buf[..]);
-        let object = match parse(&mut cursor) {
-            Ok(o) => o,
-            Err(err) => {
-                error!("Parse error: {}", err);
-                break;
-            }
-        };
-
-        let cmd = match Command::try_from(object) {
-            Ok(o) => o,
-            Err(err) => {
-                error!("Invalid command: {}", err);
-                break;
-            }
-        };
-
-        info!("Incoming command: {:?}", cmd);
-        wal.append(&cmd).unwrap();
-        let response: Vec<u8> = db.execute(cmd).unwrap().into();
-        if let Err(error) = stream.write(&response) {
-            error!("Write: {}", error);
-        }
-    }
-
-    if let Err(error) = stream.shutdown(Shutdown::Both) {
-        let kind = error.kind();
-        debug!("Shutdown: ErrorKind::{:?}", kind);
-        if kind != io::ErrorKind::NotConnected {
-            error!("Shutdown: {}", error);
         }
     }
 }
