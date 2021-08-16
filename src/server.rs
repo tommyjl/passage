@@ -1,7 +1,6 @@
 use crate::command::Command;
 use crate::db::{Database, HashMapDatabase};
 use crate::object::parse;
-use crate::thread_pool::ThreadPool;
 use crate::wal::Wal;
 use log::{debug, error, info, trace};
 use nix::poll::{poll, PollFd, PollFlags};
@@ -10,22 +9,20 @@ use std::convert::TryFrom;
 use std::error::Error;
 use std::io;
 use std::io::prelude::*;
-use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use std::time::Instant;
 
 pub const MESSAGE_MAX_SIZE: usize = 512;
 
-pub struct Server<P: ThreadPool> {
+pub struct Server {
     opt: ServerOptions,
-    pool: P,
     db: Arc<dyn Database>,
     wal: Arc<Wal>,
 }
 
 pub struct ServerOptions {
-    pub thread_count: usize,
     pub backlog: i32,
     pub port: &'static str,
 
@@ -51,8 +48,8 @@ impl ServerOptions {
     }
 }
 
-impl<P: ThreadPool> Server<P> {
-    pub fn new(options: ServerOptions, pool: P, wal: Arc<Wal>) -> Self {
+impl Server {
+    pub fn new(options: ServerOptions, wal: Arc<Wal>) -> Self {
         let time = Instant::now();
         let db: Arc<dyn Database> = Arc::new(HashMapDatabase::new());
         while let Some(cmd) = wal.read() {
@@ -62,7 +59,6 @@ impl<P: ThreadPool> Server<P> {
         trace!("Server init took {} ms", time.elapsed().as_millis());
         Self {
             opt: options,
-            pool,
             db,
             wal,
         }
@@ -76,16 +72,15 @@ impl<P: ThreadPool> Server<P> {
         socket.listen(self.opt.backlog)?;
         trace!("Listening on {}:{}", address.ip(), address.port());
 
-        // The elements of the same index of pollfds and sockets should always correspond to the
-        // same file descriptor. This is not ideal, but nix::poll::PollFd does not expose the fd.
+        // The elements of the same index of pollfds, sockets, and bufs should
+        // always correspond to the same file descriptor.
         let mut pollfds = vec![PollFd::new(socket.as_raw_fd(), PollFlags::POLLIN)];
         let mut sockets = vec![socket];
+        let mut bufs = vec![[0u8; MESSAGE_MAX_SIZE]];
+
         let mut cleanup_ids: Vec<usize> = Vec::new();
 
         loop {
-            trace!("pollfds.len() = {}", pollfds.len());
-            trace!("sockets.len() = {}", sockets.len());
-
             let mut count = poll(&mut pollfds, -1)?;
             if count < 0 {
                 error!("Poll returned {}", count);
@@ -94,49 +89,44 @@ impl<P: ThreadPool> Server<P> {
 
             for i in 0..pollfds.len() {
                 if count == 0 {
-                    continue;
+                    break;
                 }
 
                 let pollfd = &pollfds[i];
                 let socket = &mut sockets[i];
+                let buf = &mut bufs[i];
 
-                if let Some(flags) = pollfd.revents() {
-                    if flags.is_empty() {
+                if let Some(revents) = pollfd.revents() {
+                    if revents.is_empty() {
                         continue;
                     }
-
                     count -= 1;
 
                     if i == 0 {
-                        if !flags.intersects(PollFlags::POLLIN) {
+                        if !revents.intersects(PollFlags::POLLIN) {
                             error!("Invalid flag");
                             std::process::exit(1);
                         }
 
+                        trace!("Incoming connection");
                         let (stream, _addr) = socket.accept()?;
                         self.opt.set_sockopts(&stream)?;
 
-                        pollfds.push(PollFd::new(
-                            stream.as_raw_fd(),
-                            PollFlags::POLLIN | PollFlags::POLLOUT,
-                        ));
+                        pollfds.push(PollFd::new(stream.as_raw_fd(), PollFlags::POLLIN));
                         sockets.push(stream);
+                        bufs.push([0; MESSAGE_MAX_SIZE]);
                         trace!("Accepted connection");
                     } else {
-                        if flags.intersects(PollFlags::POLLHUP) {
+                        if revents.intersects(PollFlags::POLLHUP) {
                             trace!("POLLHUP");
                             cleanup_ids.push(i);
                             continue;
                         }
 
-                        if flags.intersects(PollFlags::POLLIN) {
-                            // TODO: peek and only read as much as needed to support multiple
-                            // reads on the same connection?
-                            let mut buf = [0; MESSAGE_MAX_SIZE];
-                            let size = socket.read(&mut buf)?;
+                        if revents.intersects(PollFlags::POLLIN) {
+                            let size = socket.read(buf)?;
                             if size == 0 {
-                                // TODO: Why do we keep landing here after the initial read?
-                                // debug!("read {} bytes", size);
+                                debug!("read {} bytes", size);
                                 continue;
                             }
 
@@ -149,6 +139,10 @@ impl<P: ThreadPool> Server<P> {
                                 }
                             };
 
+                            if cursor.position() as usize != size {
+                                buf.rotate_left(size);
+                            }
+
                             let cmd = match Command::try_from(object) {
                                 Ok(o) => o,
                                 Err(err) => {
@@ -160,19 +154,11 @@ impl<P: ThreadPool> Server<P> {
                             info!("Incoming command: {:?}", cmd);
                             self.wal.append(&cmd).unwrap();
                             let response: Vec<u8> = self.db.execute(cmd).unwrap().into();
+
+                            // TODO: Should PollFlags::POLLOUT be used?
                             if let Err(error) = socket.write(&response) {
                                 error!("Write: {}", error);
                             }
-
-                            // socket.shutdown(Shutdown::Both)?;
-                            cleanup_ids.push(i);
-
-                            // std::process::exit(1);
-                        }
-
-                        if flags.intersects(PollFlags::POLLOUT) {
-                            // TODO: Handle write
-                            // debug!("POLLOUT");
                         }
                     }
                 }
@@ -180,6 +166,7 @@ impl<P: ThreadPool> Server<P> {
             while let Some(i) = cleanup_ids.pop() {
                 pollfds.remove(i);
                 sockets.remove(i);
+                bufs.remove(i);
             }
         }
     }

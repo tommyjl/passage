@@ -1,7 +1,6 @@
 use clap::{crate_authors, crate_version, Clap};
 use passage::default_env;
 use passage::server::{Server, ServerOptions};
-use passage::thread_pool::*;
 use passage::wal::Wal;
 use std::error::Error;
 use std::sync::Arc;
@@ -14,9 +13,6 @@ struct Opts {
 
     #[clap(long)]
     fsync: bool,
-
-    #[clap(long, default_value = "2")]
-    thread_count: usize,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -27,7 +23,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let opts = Opts::parse();
 
     let options = ServerOptions {
-        thread_count: opts.thread_count,
         backlog: 128,
         port: "12345",
         only_v6: false,
@@ -35,7 +30,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         reuse_port: true,
         nodelay: true,
     };
-    let pool = ReceiverThreadPool::new(options.thread_count);
     let wal = Arc::new(Wal::new(&opts.log_file, opts.fsync).unwrap());
-    Server::new(options, pool, wal).run()
+    Server::new(options, wal).run()
 }
