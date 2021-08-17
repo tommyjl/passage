@@ -155,7 +155,6 @@ impl Server {
                             self.wal.append(&cmd).unwrap();
                             let response: Vec<u8> = self.db.execute(cmd).unwrap().into();
 
-                            // TODO: Should PollFlags::POLLOUT be used?
                             if let Err(error) = socket.write(&response) {
                                 error!("Write: {}", error);
                             }
