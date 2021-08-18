@@ -16,12 +16,6 @@ use std::time::Instant;
 
 pub const MESSAGE_MAX_SIZE: usize = 512;
 
-pub struct Server {
-    opt: ServerOptions,
-    db: Arc<dyn Database>,
-    wal: Arc<Wal>,
-}
-
 pub struct ServerOptions {
     pub backlog: i32,
     pub port: &'static str,
@@ -46,6 +40,36 @@ impl ServerOptions {
 
         Ok(())
     }
+}
+
+#[derive(Debug)]
+enum ServerEvent {
+    IncomingConnection,
+    CloseConnection,
+    IncomingCommand,
+}
+
+impl ServerEvent {
+    fn check(index: usize, pollfd: &PollFd) -> Option<Self> {
+        pollfd.revents().and_then(|revents| {
+            // The 0-index is the listener, everything else is a connection
+            if index == 0 && revents.intersects(PollFlags::POLLIN) {
+                Some(ServerEvent::IncomingConnection)
+            } else if revents.intersects(PollFlags::POLLHUP) {
+                Some(ServerEvent::CloseConnection)
+            } else if revents.intersects(PollFlags::POLLIN) {
+                Some(ServerEvent::IncomingCommand)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+pub struct Server {
+    opt: ServerOptions,
+    db: Arc<dyn Database>,
+    wal: Arc<Wal>,
 }
 
 impl Server {
@@ -96,34 +120,20 @@ impl Server {
                 let socket = &mut sockets[i];
                 let buf = &mut bufs[i];
 
-                if let Some(revents) = pollfd.revents() {
-                    if revents.is_empty() {
-                        continue;
-                    }
+                if let Some(event) = ServerEvent::check(i, pollfd) {
                     count -= 1;
+                    trace!("New event: {:?}", event);
+                    match event {
+                        ServerEvent::IncomingConnection => {
+                            let (stream, _addr) = socket.accept()?;
+                            self.opt.set_sockopts(&stream)?;
 
-                    if i == 0 {
-                        if !revents.intersects(PollFlags::POLLIN) {
-                            error!("Invalid flag");
-                            std::process::exit(1);
+                            pollfds.push(PollFd::new(stream.as_raw_fd(), PollFlags::POLLIN));
+                            sockets.push(stream);
+                            bufs.push([0; MESSAGE_MAX_SIZE]);
                         }
-
-                        trace!("Incoming connection");
-                        let (stream, _addr) = socket.accept()?;
-                        self.opt.set_sockopts(&stream)?;
-
-                        pollfds.push(PollFd::new(stream.as_raw_fd(), PollFlags::POLLIN));
-                        sockets.push(stream);
-                        bufs.push([0; MESSAGE_MAX_SIZE]);
-                        trace!("Accepted connection");
-                    } else {
-                        if revents.intersects(PollFlags::POLLHUP) {
-                            trace!("POLLHUP");
-                            cleanup_ids.push(i);
-                            continue;
-                        }
-
-                        if revents.intersects(PollFlags::POLLIN) {
+                        ServerEvent::CloseConnection => cleanup_ids.push(i),
+                        ServerEvent::IncomingCommand => {
                             let size = socket.read(buf)?;
                             if size == 0 {
                                 debug!("read {} bytes", size);
@@ -135,7 +145,7 @@ impl Server {
                                 Ok(o) => o,
                                 Err(err) => {
                                     error!("Parse error: {}", err);
-                                    break;
+                                    continue;
                                 }
                             };
 
@@ -146,12 +156,12 @@ impl Server {
                             let cmd = match Command::try_from(object) {
                                 Ok(o) => o,
                                 Err(err) => {
-                                    error!("Invalid command: {}", err);
-                                    break;
+                                    debug!("Invalid command: {}", err);
+                                    continue;
                                 }
                             };
 
-                            info!("Incoming command: {:?}", cmd);
+                            debug!("Incoming command: {:?}", cmd);
                             self.wal.append(&cmd).unwrap();
                             let response: Vec<u8> = self.db.execute(cmd).unwrap().into();
 
