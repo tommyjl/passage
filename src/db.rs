@@ -13,7 +13,6 @@ pub type DbResult<'a, T> = Result<T, DbError<'a>>;
 
 #[derive(Debug)]
 pub enum DbError<'a> {
-    NotFound,
     ReadLock(PoisonError<RwLockReadGuard<'a, HashMap<Object, Object>>>),
     WriteLock(PoisonError<RwLockWriteGuard<'a, HashMap<Object, Object>>>),
     Utf8(FromUtf8Error),
@@ -22,7 +21,6 @@ pub enum DbError<'a> {
 impl<'a> Display for DbError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DbError::NotFound => write!(f, "Database entry was not found"),
             DbError::ReadLock(inner) => write!(f, "{}", inner),
             DbError::WriteLock(inner) => write!(f, "{}", inner),
             DbError::Utf8(inner) => write!(f, "{}", inner),
@@ -61,17 +59,33 @@ impl HashMapDatabase {
 
     fn get(&self, key: Vec<u8>) -> DbResult<Object> {
         let key = Object::SimpleString(String::from_utf8(key)?);
-        self.db.read()?.get(&key).cloned().ok_or(DbError::NotFound)
+        let old = self
+            .db
+            .read()?
+            .get(&key)
+            .cloned()
+            .unwrap_or(Object::BulkString(None));
+        Ok(old)
     }
 
     fn set(&self, key: Vec<u8>, value: Object) -> DbResult<Object> {
         let key = Object::SimpleString(String::from_utf8(key)?);
-        self.db.write()?.insert(key, value).ok_or(DbError::NotFound)
+        let old = self
+            .db
+            .write()?
+            .insert(key, value)
+            .unwrap_or(Object::BulkString(None));
+        Ok(old)
     }
 
     fn remove(&self, key: Vec<u8>) -> DbResult<Object> {
         let key = Object::SimpleString(String::from_utf8(key)?);
-        self.db.write()?.remove(&key).ok_or(DbError::NotFound)
+        let old = self
+            .db
+            .write()?
+            .remove(&key)
+            .unwrap_or(Object::BulkString(None));
+        Ok(old)
     }
 }
 
