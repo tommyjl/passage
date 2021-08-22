@@ -69,6 +69,7 @@ impl ServerEvent {
 struct SocketHandle {
     socket: Socket,
     buf: [u8; MESSAGE_MAX_SIZE],
+    offset: usize,
 }
 
 impl SocketHandle {
@@ -76,6 +77,7 @@ impl SocketHandle {
         Self {
             socket,
             buf: [0u8; MESSAGE_MAX_SIZE],
+            offset: 0,
         }
     }
 }
@@ -142,39 +144,54 @@ impl Server {
                         }
                         ServerEvent::CloseConnection => cleanup_ids.push(i),
                         ServerEvent::IncomingCommand => {
-                            let size = handle.socket.read(&mut handle.buf)?;
+                            let size = handle.socket.read(&mut handle.buf[handle.offset..])?;
                             if size == 0 {
                                 debug!("read {} bytes", size);
                                 continue;
                             }
 
                             let mut cursor = io::Cursor::new(&handle.buf[..]);
-                            let object = match parse(&mut cursor) {
-                                Ok(o) => o,
-                                Err(err) => {
-                                    error!("Parse error: {}", err);
-                                    continue;
-                                }
-                            };
+                            let mut offset = 0;
+                            while cursor.position() < size as u64 {
+                                offset = cursor.position() as usize;
 
-                            if cursor.position() as usize != size {
-                                handle.buf.rotate_left(size);
+                                let object = match parse(&mut cursor) {
+                                    Ok(o) => o,
+                                    Err(err) if matches!(err, crate::object::Error::Incomplete) => {
+                                        if offset == 0 {
+                                            trace!("Max message size exceeded");
+                                            cleanup_ids.push(i);
+                                        }
+                                        break;
+                                    }
+                                    Err(err) => {
+                                        error!("Parse error: {}", err);
+                                        continue;
+                                    }
+                                };
+
+                                let cmd = match Command::try_from(object) {
+                                    Ok(o) => o,
+                                    Err(err) => {
+                                        debug!("Invalid command: {}", err);
+                                        continue;
+                                    }
+                                };
+
+                                debug!("Incoming command: {:?}", cmd);
+                                self.wal.append(&cmd).unwrap();
+                                let response: Vec<u8> = self.db.execute(cmd).unwrap().into();
+
+                                if let Err(error) = handle.socket.write(&response) {
+                                    error!("Write: {}", error);
+                                }
                             }
 
-                            let cmd = match Command::try_from(object) {
-                                Ok(o) => o,
-                                Err(err) => {
-                                    debug!("Invalid command: {}", err);
-                                    continue;
-                                }
-                            };
-
-                            debug!("Incoming command: {:?}", cmd);
-                            self.wal.append(&cmd).unwrap();
-                            let response: Vec<u8> = self.db.execute(cmd).unwrap().into();
-
-                            if let Err(error) = handle.socket.write(&response) {
-                                error!("Write: {}", error);
+                            if offset < size {
+                                handle.buf.rotate_left(offset);
+                                handle.offset = size - offset;
+                            } else {
+                                handle.offset = 0;
                             }
                         }
                     }
