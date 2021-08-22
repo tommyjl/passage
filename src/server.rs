@@ -2,7 +2,7 @@ use crate::command::Command;
 use crate::db::{Database, HashMapDatabase};
 use crate::object::parse;
 use crate::wal::Wal;
-use log::{debug, error, info, trace};
+use log::{debug, error, trace};
 use nix::poll::{poll, PollFd, PollFlags};
 use socket2::{Domain, Socket, Type};
 use std::convert::TryFrom;
@@ -66,6 +66,20 @@ impl ServerEvent {
     }
 }
 
+struct SocketHandle {
+    socket: Socket,
+    buf: [u8; MESSAGE_MAX_SIZE],
+}
+
+impl SocketHandle {
+    fn new(socket: Socket) -> Self {
+        Self {
+            socket,
+            buf: [0u8; MESSAGE_MAX_SIZE],
+        }
+    }
+}
+
 pub struct Server {
     opt: ServerOptions,
     db: Arc<dyn Database>,
@@ -96,11 +110,10 @@ impl Server {
         socket.listen(self.opt.backlog)?;
         trace!("Listening on {}:{}", address.ip(), address.port());
 
-        // The elements of the same index of pollfds, sockets, and bufs should
+        // The elements of the same index of pollfds and socket handles should
         // always correspond to the same file descriptor.
         let mut pollfds = vec![PollFd::new(socket.as_raw_fd(), PollFlags::POLLIN)];
-        let mut sockets = vec![socket];
-        let mut bufs = vec![[0u8; MESSAGE_MAX_SIZE]];
+        let mut handles = vec![SocketHandle::new(socket)];
 
         let mut cleanup_ids: Vec<usize> = Vec::new();
 
@@ -115,32 +128,27 @@ impl Server {
                 if count == 0 {
                     break;
                 }
-
-                let pollfd = &pollfds[i];
-                let socket = &mut sockets[i];
-                let buf = &mut bufs[i];
-
-                if let Some(event) = ServerEvent::check(i, pollfd) {
-                    count -= 1;
+                if let Some(event) = ServerEvent::check(i, &pollfds[i]) {
                     trace!("New event: {:?}", event);
+                    count -= 1;
+                    let handle = &mut handles[i];
                     match event {
                         ServerEvent::IncomingConnection => {
-                            let (stream, _addr) = socket.accept()?;
+                            let (stream, _addr) = handle.socket.accept()?;
                             self.opt.set_sockopts(&stream)?;
 
                             pollfds.push(PollFd::new(stream.as_raw_fd(), PollFlags::POLLIN));
-                            sockets.push(stream);
-                            bufs.push([0; MESSAGE_MAX_SIZE]);
+                            handles.push(SocketHandle::new(stream));
                         }
                         ServerEvent::CloseConnection => cleanup_ids.push(i),
                         ServerEvent::IncomingCommand => {
-                            let size = socket.read(buf)?;
+                            let size = handle.socket.read(&mut handle.buf)?;
                             if size == 0 {
                                 debug!("read {} bytes", size);
                                 continue;
                             }
 
-                            let mut cursor = io::Cursor::new(&buf[..]);
+                            let mut cursor = io::Cursor::new(&handle.buf[..]);
                             let object = match parse(&mut cursor) {
                                 Ok(o) => o,
                                 Err(err) => {
@@ -150,7 +158,7 @@ impl Server {
                             };
 
                             if cursor.position() as usize != size {
-                                buf.rotate_left(size);
+                                handle.buf.rotate_left(size);
                             }
 
                             let cmd = match Command::try_from(object) {
@@ -165,7 +173,7 @@ impl Server {
                             self.wal.append(&cmd).unwrap();
                             let response: Vec<u8> = self.db.execute(cmd).unwrap().into();
 
-                            if let Err(error) = socket.write(&response) {
+                            if let Err(error) = handle.socket.write(&response) {
                                 error!("Write: {}", error);
                             }
                         }
@@ -174,8 +182,7 @@ impl Server {
             }
             while let Some(i) = cleanup_ids.pop() {
                 pollfds.remove(i);
-                sockets.remove(i);
-                bufs.remove(i);
+                handles.remove(i);
             }
         }
     }
