@@ -25,6 +25,9 @@ pub struct ServerOptions {
     pub reuse_address: bool,
     pub reuse_port: bool,
     pub nodelay: bool,
+
+    // Cluster options
+    pub cluster_nodes: Vec<String>,
 }
 
 impl ServerOptions {
@@ -111,6 +114,11 @@ impl Server {
         socket.bind(&address.into())?;
         socket.listen(self.opt.backlog)?;
         trace!("Listening on {}:{}", address.ip(), address.port());
+
+        debug!(
+            "TODO: Do something with the cluster nodes {:?}",
+            &self.opt.cluster_nodes
+        );
 
         // The elements of the same index of pollfds and socket handles should
         // always correspond to the same file descriptor.

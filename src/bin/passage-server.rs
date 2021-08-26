@@ -12,6 +12,9 @@ struct Opts {
     log_file: String,
 
     #[clap(long)]
+    cluster_nodes: Vec<String>,
+
+    #[clap(long)]
     fsync: bool,
 }
 
@@ -29,6 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         reuse_address: true,
         reuse_port: true,
         nodelay: true,
+        cluster_nodes: opts.cluster_nodes,
     };
     let wal = Arc::new(Wal::new(&opts.log_file, opts.fsync).unwrap());
     Server::new(options, wal).run()
