@@ -12,7 +12,8 @@ use std::io::prelude::*;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
-use std::time::Instant;
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub const MESSAGE_MAX_SIZE: usize = 512;
 
@@ -120,6 +121,21 @@ impl Server {
             &self.opt.cluster_nodes
         );
 
+        let mut cluster_nodes = Vec::new();
+        while cluster_nodes.len() < self.opt.cluster_nodes.len() {
+            let node_address: SocketAddr = self.opt.cluster_nodes[cluster_nodes.len()].parse()?;
+            let node_socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+            if let Err(err) = node_socket.connect(&node_address.into()) {
+                debug!("Failed to connect to node {:?}", node_address);
+                error!("{}", err);
+                thread::sleep(Duration::from_millis(1000)); // TODO: Get from config
+            } else {
+                debug!("Successfully connected to node {:?}", node_address);
+                cluster_nodes.push(node_socket);
+            }
+        }
+        trace!("Added all cluster nodes");
+
         // The elements of the same index of pollfds and socket handles should
         // always correspond to the same file descriptor.
         let mut pollfds = vec![PollFd::new(socket.as_raw_fd(), PollFlags::POLLIN)];
@@ -188,6 +204,14 @@ impl Server {
 
                                 debug!("Incoming command: {:?}", cmd);
                                 self.wal.append(&cmd).unwrap();
+
+                                // TODO: Check if cmd is dirty
+                                for node in cluster_nodes.iter_mut() {
+                                    trace!("Writing to node");
+                                    let buf = &handle.buf[0..cursor.position() as usize];
+                                    node.write(buf).unwrap();
+                                }
+
                                 let response: Vec<u8> = self.db.execute(cmd).unwrap().into();
 
                                 if let Err(error) = handle.socket.write(&response) {
