@@ -6,7 +6,12 @@ use std::string::FromUtf8Error;
 use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 pub trait Database: Send + Sync {
-    fn execute(&self, cmd: Command) -> DbResult<Object>;
+    fn execute(&self, cmd: Command) -> DbResult<DatabaseResponse>;
+}
+
+pub struct DatabaseResponse {
+    pub object: Object,
+    pub is_dirty: bool,
 }
 
 pub type DbResult<'a, T> = Result<T, DbError<'a>>;
@@ -57,7 +62,7 @@ impl HashMapDatabase {
         }
     }
 
-    fn get(&self, key: Vec<u8>) -> DbResult<Object> {
+    fn get(&self, key: Vec<u8>) -> DbResult<DatabaseResponse> {
         let key = Object::SimpleString(String::from_utf8(key)?);
         let old = self
             .db
@@ -65,32 +70,42 @@ impl HashMapDatabase {
             .get(&key)
             .cloned()
             .unwrap_or(Object::BulkString(None));
-        Ok(old)
+        Ok(DatabaseResponse {
+            object: old,
+            is_dirty: false,
+        })
     }
 
-    fn set(&self, key: Vec<u8>, value: Object) -> DbResult<Object> {
+    fn set(&self, key: Vec<u8>, value: Object) -> DbResult<DatabaseResponse> {
         let key = Object::SimpleString(String::from_utf8(key)?);
         let old = self
             .db
             .write()?
             .insert(key, value)
             .unwrap_or(Object::BulkString(None));
-        Ok(old)
+        Ok(DatabaseResponse {
+            object: old,
+            is_dirty: true,
+        })
     }
 
-    fn remove(&self, key: Vec<u8>) -> DbResult<Object> {
+    fn remove(&self, key: Vec<u8>) -> DbResult<DatabaseResponse> {
         let key = Object::SimpleString(String::from_utf8(key)?);
         let old = self
             .db
             .write()?
             .remove(&key)
             .unwrap_or(Object::BulkString(None));
-        Ok(old)
+        let is_dirty = old != Object::BulkString(None);
+        Ok(DatabaseResponse {
+            object: old,
+            is_dirty,
+        })
     }
 }
 
 impl Database for HashMapDatabase {
-    fn execute(&self, cmd: Command) -> DbResult<Object> {
+    fn execute(&self, cmd: Command) -> DbResult<DatabaseResponse> {
         match cmd {
             Command::Get(key) => self.get(key.into()),
             Command::Set(key, value) => self.set(key.into(), Object::BulkString(Some(value))),

@@ -205,16 +205,17 @@ impl Server {
                                 debug!("Incoming command: {:?}", cmd);
                                 self.wal.append(&cmd).unwrap();
 
-                                // TODO: Check if cmd is dirty
-                                for node in cluster_nodes.iter_mut() {
-                                    trace!("Writing to node");
-                                    let buf = &handle.buf[0..cursor.position() as usize];
-                                    node.write(buf).unwrap();
+                                let response = self.db.execute(cmd).unwrap();
+
+                                if response.is_dirty {
+                                    for node in cluster_nodes.iter_mut() {
+                                        let buf = &handle.buf[0..cursor.position() as usize];
+                                        node.write(buf).unwrap();
+                                    }
                                 }
 
-                                let response: Vec<u8> = self.db.execute(cmd).unwrap().into();
-
-                                if let Err(error) = handle.socket.write(&response) {
+                                let response_buf: Vec<u8> = response.object.into();
+                                if let Err(error) = handle.socket.write(&response_buf) {
                                     error!("Write: {}", error);
                                 }
                             }
