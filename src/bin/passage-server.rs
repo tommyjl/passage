@@ -33,6 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         reuse_port: true,
         nodelay: true,
         cluster_nodes: opts.cluster_nodes,
+        cluster_connect_timeout: 1000,
     };
     let wal = Arc::new(Wal::new(&opts.log_file, opts.fsync).unwrap());
     Server::new(options, wal).run()

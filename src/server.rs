@@ -29,6 +29,7 @@ pub struct ServerOptions {
 
     // Cluster options
     pub cluster_nodes: Vec<String>,
+    pub cluster_connect_timeout: u64,
 }
 
 impl ServerOptions {
@@ -109,32 +110,8 @@ impl Server {
     }
 
     pub fn run(&self) -> Result<(), Box<dyn Error>> {
-        let address: SocketAddr = format!("0.0.0.0:{}", self.opt.port).parse()?;
-        let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
-        self.opt.set_sockopts(&socket)?;
-        socket.bind(&address.into())?;
-        socket.listen(self.opt.backlog)?;
-        trace!("Listening on {}:{}", address.ip(), address.port());
-
-        debug!(
-            "TODO: Do something with the cluster nodes {:?}",
-            &self.opt.cluster_nodes
-        );
-
-        let mut cluster_nodes = Vec::new();
-        while cluster_nodes.len() < self.opt.cluster_nodes.len() {
-            let node_address: SocketAddr = self.opt.cluster_nodes[cluster_nodes.len()].parse()?;
-            let node_socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
-            if let Err(err) = node_socket.connect(&node_address.into()) {
-                debug!("Failed to connect to node {:?}", node_address);
-                error!("{}", err);
-                thread::sleep(Duration::from_millis(1000)); // TODO: Get from config
-            } else {
-                debug!("Successfully connected to node {:?}", node_address);
-                cluster_nodes.push(node_socket);
-            }
-        }
-        trace!("Added all cluster nodes");
+        let socket = self.listen_socket()?;
+        let mut cluster_nodes = self.spawn_cluster_nodes()?;
 
         // The elements of the same index of pollfds and socket handles should
         // always correspond to the same file descriptor.
@@ -145,11 +122,6 @@ impl Server {
 
         loop {
             let mut count = poll(&mut pollfds, -1)?;
-            if count < 0 {
-                error!("Poll returned {}", count);
-                std::process::exit(1);
-            }
-
             for i in 0..pollfds.len() {
                 if count == 0 {
                     break;
@@ -235,5 +207,33 @@ impl Server {
                 handles.remove(i);
             }
         }
+    }
+
+    fn listen_socket(&self) -> Result<Socket, Box<dyn Error>> {
+        let address: SocketAddr = format!("0.0.0.0:{}", self.opt.port).parse()?;
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
+        self.opt.set_sockopts(&socket)?;
+        socket.bind(&address.into())?;
+        socket.listen(self.opt.backlog)?;
+        trace!("Listening on {}:{}", address.ip(), address.port());
+        Ok(socket)
+    }
+
+    fn spawn_cluster_nodes(&self) -> Result<Vec<Socket>, Box<dyn Error>> {
+        let mut cluster_nodes = Vec::new();
+        while cluster_nodes.len() < self.opt.cluster_nodes.len() {
+            let node_address: SocketAddr = self.opt.cluster_nodes[cluster_nodes.len()].parse()?;
+            let node_socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+            if let Err(err) = node_socket.connect(&node_address.into()) {
+                debug!("Failed to connect to node {:?}", node_address);
+                error!("{}", err);
+                thread::sleep(Duration::from_millis(self.opt.cluster_connect_timeout));
+            } else {
+                debug!("Successfully connected to node {:?}", node_address);
+                cluster_nodes.push(node_socket);
+            }
+        }
+        trace!("Added all cluster nodes");
+        Ok(cluster_nodes)
     }
 }
