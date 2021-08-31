@@ -1,3 +1,4 @@
+use crate::cluster::Cluster;
 use crate::command::Command;
 use crate::db::{Database, HashMapDatabase};
 use crate::object::parse;
@@ -12,11 +13,11 @@ use std::io::prelude::*;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub const MESSAGE_MAX_SIZE: usize = 512;
 
+#[derive(Clone)]
 pub struct ServerOptions {
     pub backlog: i32,
     pub port: u32,
@@ -110,8 +111,8 @@ impl Server {
     }
 
     pub fn run(&self) -> Result<(), Box<dyn Error>> {
-        let socket = self.listen_socket()?;
-        let mut cluster_nodes = self.spawn_cluster_nodes()?;
+        let socket = self.listen()?;
+        let mut cluster = Cluster::new(self.opt.clone())?;
 
         // The elements of the same index of pollfds and socket handles should
         // always correspond to the same file descriptor.
@@ -180,10 +181,8 @@ impl Server {
                                 let response = self.db.execute(cmd).unwrap();
 
                                 if response.is_dirty {
-                                    for node in cluster_nodes.iter_mut() {
-                                        let buf = &handle.buf[0..cursor.position() as usize];
-                                        node.write(buf).unwrap();
-                                    }
+                                    let buf = &handle.buf[0..cursor.position() as usize];
+                                    cluster.relay(buf);
                                 }
 
                                 let response_buf: Vec<u8> = response.object.into();
@@ -209,7 +208,7 @@ impl Server {
         }
     }
 
-    fn listen_socket(&self) -> Result<Socket, Box<dyn Error>> {
+    fn listen(&self) -> Result<Socket, Box<dyn Error>> {
         let address: SocketAddr = format!("0.0.0.0:{}", self.opt.port).parse()?;
         let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
         self.opt.set_sockopts(&socket)?;
@@ -217,23 +216,5 @@ impl Server {
         socket.listen(self.opt.backlog)?;
         trace!("Listening on {}:{}", address.ip(), address.port());
         Ok(socket)
-    }
-
-    fn spawn_cluster_nodes(&self) -> Result<Vec<Socket>, Box<dyn Error>> {
-        let mut cluster_nodes = Vec::new();
-        while cluster_nodes.len() < self.opt.cluster_nodes.len() {
-            let node_address: SocketAddr = self.opt.cluster_nodes[cluster_nodes.len()].parse()?;
-            let node_socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
-            if let Err(err) = node_socket.connect(&node_address.into()) {
-                debug!("Failed to connect to node {:?}", node_address);
-                error!("{}", err);
-                thread::sleep(Duration::from_millis(self.opt.cluster_connect_timeout));
-            } else {
-                debug!("Successfully connected to node {:?}", node_address);
-                cluster_nodes.push(node_socket);
-            }
-        }
-        trace!("Added all cluster nodes");
-        Ok(cluster_nodes)
     }
 }
