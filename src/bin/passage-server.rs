@@ -16,6 +16,9 @@ struct Opts {
 
     #[clap(long)]
     fsync: bool,
+
+    #[clap(short, long, default_value = "12345")]
+    port: u32,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -27,7 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let options = ServerOptions {
         backlog: 128,
-        port: "12345",
+        port: opts.port,
         only_v6: false,
         reuse_address: true,
         reuse_port: true,

@@ -19,7 +19,7 @@ pub const MESSAGE_MAX_SIZE: usize = 512;
 
 pub struct ServerOptions {
     pub backlog: i32,
-    pub port: &'static str,
+    pub port: u32,
 
     // Socket options
     pub only_v6: bool,
