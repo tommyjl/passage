@@ -1,7 +1,8 @@
 use crate::cluster::Cluster;
 use crate::command::Command;
-use crate::db::{Database, HashMapDatabase};
+use crate::db::{Database, DatabaseResponse, HashMapDatabase};
 use crate::object::parse;
+use crate::object::Object;
 use crate::wal::Wal;
 use log::{debug, error, trace};
 use nix::poll::{poll, PollFd, PollFlags};
@@ -21,6 +22,7 @@ pub const MESSAGE_MAX_SIZE: usize = 512;
 pub struct ServerOptions {
     pub backlog: i32,
     pub port: u32,
+    pub read_only: bool,
 
     // Socket options
     pub only_v6: bool,
@@ -176,9 +178,18 @@ impl Server {
                                 };
 
                                 debug!("Incoming command: {:?}", cmd);
-                                self.wal.append(&cmd).unwrap();
 
-                                let response = self.db.execute(cmd).unwrap();
+                                let response = if self.opt.read_only && cmd.possibly_dirty() {
+                                    DatabaseResponse {
+                                        object: Object::Error(
+                                            "Read-only mode: Illegal command".to_string(),
+                                        ),
+                                        is_dirty: false,
+                                    }
+                                } else {
+                                    self.wal.append(&cmd).unwrap();
+                                    self.db.execute(cmd).unwrap()
+                                };
 
                                 if response.is_dirty {
                                     let buf = &handle.buf[0..cursor.position() as usize];

@@ -8,6 +8,16 @@ pub enum Command {
     Remove(String),
 }
 
+impl Command {
+    pub fn possibly_dirty(&self) -> bool {
+        match self {
+            Command::Get(_) => false,
+            Command::Set(_, _) => true,
+            Command::Remove(_) => true,
+        }
+    }
+}
+
 impl TryFrom<Object> for Command {
     type Error = String;
 
