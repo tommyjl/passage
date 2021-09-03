@@ -1,5 +1,6 @@
 use crate::cluster::Cluster;
 use crate::command::Command;
+use crate::command::{NetCommand, NetCommandError};
 use crate::db::{Database, DatabaseResponse, HashMapDatabase};
 use crate::object::parse;
 use crate::object::Object;
@@ -168,6 +169,11 @@ impl Server {
                                         continue;
                                     }
                                 };
+
+                                if let Ok(net_cmd) = NetCommand::try_from(&object) {
+                                    trace!("Handling network command! {:?}", net_cmd);
+                                    continue;
+                                }
 
                                 let cmd = match Command::try_from(object) {
                                     Ok(o) => o,

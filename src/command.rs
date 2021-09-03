@@ -58,3 +58,40 @@ fn get_string(obj: &Object) -> Result<String, String> {
         _ => Err("Unsupported type".to_string()),
     }
 }
+
+#[derive(Debug)]
+pub enum NetCommand {
+    Master(String),
+}
+
+pub enum NetCommandError {
+    Invalid,
+    NotANetCommand,
+}
+
+impl TryFrom<&Object> for NetCommand {
+    type Error = NetCommandError;
+
+    fn try_from(obj: &Object) -> Result<Self, Self::Error> {
+        if let Object::Array(objs) = obj {
+            if objs.is_empty() {
+                return Err(NetCommandError::NotANetCommand);
+            }
+
+            let arity = objs.len() - 1;
+            if let Object::SimpleString(ref s) = objs[0] {
+                return match (s.as_str(), arity) {
+                    ("master", 1) => {
+                        if let Object::SimpleString(ref pass) = objs[1] {
+                            Ok(NetCommand::Master(pass.clone()))
+                        } else {
+                            Err(NetCommandError::Invalid)
+                        }
+                    }
+                    _ => Err(NetCommandError::NotANetCommand),
+                };
+            }
+        }
+        Err(NetCommandError::NotANetCommand)
+    }
+}
