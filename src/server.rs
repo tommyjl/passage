@@ -1,18 +1,12 @@
 use crate::cluster::Cluster;
-use crate::command::Command;
-use crate::command::NetCommand;
-use crate::db::{Database, DatabaseResponse, HashMapDatabase};
-use crate::object::parse;
-use crate::object::Object;
+use crate::connection::Connection;
+use crate::db::{Database, HashMapDatabase};
 use crate::wal::Wal;
-use log::{debug, error, trace};
+use log::trace;
 use nix::poll::{poll, PollFd, PollFlags};
-use socket2::{Domain, Socket, Type};
-use std::convert::TryFrom;
+use socket2::Socket;
 use std::error::Error;
 use std::io;
-use std::io::prelude::*;
-use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use std::time::Instant;
@@ -75,28 +69,15 @@ impl ServerEvent {
     }
 }
 
-struct SocketHandle {
-    socket: Socket,
-    buf: [u8; MESSAGE_MAX_SIZE],
-    offset: usize,
-    is_leader: bool,
-}
-
-impl SocketHandle {
-    fn new(socket: Socket) -> Self {
-        Self {
-            socket,
-            buf: [0u8; MESSAGE_MAX_SIZE],
-            offset: 0,
-            is_leader: false,
-        }
-    }
-}
-
 pub struct Server {
     opt: ServerOptions,
     db: Arc<dyn Database>,
     wal: Arc<Wal>,
+    cluster: Option<Cluster>,
+
+    // Each Connection has a corresponding PollFd on the same index.
+    connections: Vec<Connection>,
+    pollfds: Vec<PollFd>,
 }
 
 impl Server {
@@ -112,143 +93,81 @@ impl Server {
             opt: options,
             db,
             wal,
+            cluster: None,
+            pollfds: Vec::new(),
+            connections: Vec::new(),
         }
     }
 
-    pub fn run(&self) -> Result<(), Box<dyn Error>> {
-        let socket = self.listen()?;
-        let mut cluster = Cluster::new(self.opt.clone())?;
+    fn listen(&mut self) -> Result<(), Box<dyn Error>> {
+        let listener = Connection::new_listener(&self.opt)?;
+        let fd = listener.as_raw_fd();
 
-        // The elements of the same index of pollfds and socket handles should
-        // always correspond to the same file descriptor.
-        let mut pollfds = vec![PollFd::new(socket.as_raw_fd(), PollFlags::POLLIN)];
-        let mut handles = vec![SocketHandle::new(socket)];
+        self.connections.push(listener);
+        self.pollfds.push(PollFd::new(fd, PollFlags::POLLIN));
 
-        let mut cleanup_ids: Vec<usize> = Vec::new();
+        Ok(())
+    }
+
+    fn start_cluster(&mut self) -> Result<(), Box<dyn Error>> {
+        let cluster = Cluster::new(self.opt.clone())?;
+        self.cluster = Some(cluster);
+        Ok(())
+    }
+
+    fn accept_connection(&mut self, i: usize) -> Result<(), Box<dyn Error>> {
+        let connection = self.connections[i].accept(&self.opt)?;
+        let fd = connection.as_raw_fd();
+
+        self.connections.push(connection);
+        self.pollfds.push(PollFd::new(fd, PollFlags::POLLIN));
+
+        Ok(())
+    }
+
+    fn close_connection(&mut self, i: usize) {
+        self.connections[i].closed = true;
+    }
+
+    fn cleanup_closed(&mut self) {
+        trace!("Cleaning up!");
+        for i in (0..self.connections.len()).rev() {
+            if self.connections[i].closed {
+                self.pollfds.remove(i);
+                self.connections.remove(i);
+            }
+        }
+    }
+
+    fn respond_to_command(&mut self, i: usize) -> Result<(), Box<dyn Error>> {
+        self.connections[i].handle_incoming_command(
+            self.db.clone(),
+            self.wal.clone(),
+            &mut self.cluster,
+        )
+    }
+
+    pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
+        self.listen()?;
+        self.start_cluster()?;
 
         loop {
-            let mut count = poll(&mut pollfds, -1)?;
-            for i in 0..pollfds.len() {
-                if count == 0 {
+            let mut poll_count = poll(&mut self.pollfds, -1)?;
+            for i in 0..self.pollfds.len() {
+                if poll_count == 0 {
                     break;
                 }
-                if let Some(event) = ServerEvent::check(i, &pollfds[i]) {
+                if let Some(event) = ServerEvent::check(i, &self.pollfds[i]) {
                     trace!("New event: {:?}", event);
-                    count -= 1;
-                    let handle = &mut handles[i];
+                    poll_count -= 1;
                     match event {
-                        ServerEvent::IncomingConnection => {
-                            let (stream, _addr) = handle.socket.accept()?;
-                            self.opt.set_sockopts(&stream)?;
-
-                            pollfds.push(PollFd::new(stream.as_raw_fd(), PollFlags::POLLIN));
-                            handles.push(SocketHandle::new(stream));
-                        }
-                        ServerEvent::CloseConnection => cleanup_ids.push(i),
-                        ServerEvent::IncomingCommand => {
-                            let size = handle.socket.read(&mut handle.buf[handle.offset..])?;
-                            if size == 0 {
-                                debug!("read {} bytes", size);
-                                continue;
-                            }
-
-                            let mut cursor = io::Cursor::new(&handle.buf[..]);
-                            let mut offset = 0;
-                            while cursor.position() < size as u64 {
-                                let object = match parse(&mut cursor) {
-                                    Ok(o) => o,
-                                    Err(err) if matches!(err, crate::object::Error::Incomplete) => {
-                                        if offset == 0 {
-                                            trace!("Max message size exceeded");
-                                            cleanup_ids.push(i);
-                                        }
-                                        break;
-                                    }
-                                    Err(err) => {
-                                        error!("Parse error: {}", err);
-                                        continue;
-                                    }
-                                };
-
-                                if let Ok(net_cmd) = NetCommand::try_from(&object) {
-                                    trace!("Handling network command! {:?}", net_cmd);
-                                    match net_cmd {
-                                        NetCommand::Leader(ref password) => {
-                                            // TODO: Handle the password in a sane way. Should
-                                            // probably drop the connection if it was wrong, and
-                                            // the password should be hashed and fetched from some
-                                            // configuration.
-                                            handle.is_leader = password == "1234";
-                                            if handle.is_leader {
-                                                trace!("Connection is the leader node");
-                                            } else {
-                                                trace!("Incorrect password -- not leader node");
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    let cmd = match Command::try_from(object) {
-                                        Ok(o) => o,
-                                        Err(err) => {
-                                            debug!("Invalid command: {}", err);
-                                            continue;
-                                        }
-                                    };
-                                    debug!("Incoming command: {:?}", cmd);
-
-                                    let response = if cmd.possibly_dirty()
-                                        && self.opt.read_only
-                                        && !handle.is_leader
-                                    {
-                                        DatabaseResponse {
-                                            object: Object::Error(
-                                                "Read-only mode: Illegal command".to_string(),
-                                            ),
-                                            is_dirty: false,
-                                        }
-                                    } else {
-                                        self.wal.append(&cmd).unwrap();
-                                        self.db.execute(cmd).unwrap()
-                                    };
-
-                                    if response.is_dirty {
-                                        let buf = &handle.buf[offset..cursor.position() as usize];
-                                        cluster.relay(buf);
-                                    }
-
-                                    let response_buf: Vec<u8> = response.object.into();
-                                    if let Err(error) = handle.socket.write(&response_buf) {
-                                        error!("Write: {}", error);
-                                    }
-                                }
-                                offset = cursor.position() as usize;
-                                trace!("{} < {}", offset, size);
-                            }
-
-                            if offset < size {
-                                handle.buf.rotate_left(offset);
-                                handle.offset = size - offset;
-                            } else {
-                                handle.offset = 0;
-                            }
-                        }
+                        ServerEvent::IncomingConnection => self.accept_connection(i)?,
+                        ServerEvent::CloseConnection => self.close_connection(i),
+                        ServerEvent::IncomingCommand => self.respond_to_command(i)?,
                     }
                 }
             }
-            while let Some(i) = cleanup_ids.pop() {
-                pollfds.remove(i);
-                handles.remove(i);
-            }
+            self.cleanup_closed();
         }
-    }
-
-    fn listen(&self) -> Result<Socket, Box<dyn Error>> {
-        let address: SocketAddr = format!("0.0.0.0:{}", self.opt.port).parse()?;
-        let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
-        self.opt.set_sockopts(&socket)?;
-        socket.bind(&address.into())?;
-        socket.listen(self.opt.backlog)?;
-        trace!("Listening on {}:{}", address.ip(), address.port());
-        Ok(socket)
     }
 }
