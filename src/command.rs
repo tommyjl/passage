@@ -61,7 +61,7 @@ fn get_string(obj: &Object) -> Result<String, String> {
 
 #[derive(Debug)]
 pub enum NetCommand {
-    Master(String),
+    Leader(String),
 }
 
 pub enum NetCommandError {
@@ -81,9 +81,9 @@ impl TryFrom<&Object> for NetCommand {
             let arity = objs.len() - 1;
             if let Object::SimpleString(ref s) = objs[0] {
                 return match (s.as_str(), arity) {
-                    ("master", 1) => {
+                    ("leader", 1) => {
                         if let Object::SimpleString(ref pass) = objs[1] {
-                            Ok(NetCommand::Master(pass.clone()))
+                            Ok(NetCommand::Leader(pass.clone()))
                         } else {
                             Err(NetCommandError::Invalid)
                         }
@@ -99,8 +99,8 @@ impl TryFrom<&Object> for NetCommand {
 impl Into<Object> for NetCommand {
     fn into(self) -> Object {
         match self {
-            NetCommand::Master(ref s) => Object::Array(vec![
-                Object::SimpleString("master".to_string()),
+            NetCommand::Leader(ref s) => Object::Array(vec![
+                Object::SimpleString("leader".to_string()),
                 Object::SimpleString(s.clone()),
             ]),
         }

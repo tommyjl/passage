@@ -79,7 +79,7 @@ struct SocketHandle {
     socket: Socket,
     buf: [u8; MESSAGE_MAX_SIZE],
     offset: usize,
-    is_master: bool,
+    is_leader: bool,
 }
 
 impl SocketHandle {
@@ -88,7 +88,7 @@ impl SocketHandle {
             socket,
             buf: [0u8; MESSAGE_MAX_SIZE],
             offset: 0,
-            is_master: false,
+            is_leader: false,
         }
     }
 }
@@ -173,16 +173,16 @@ impl Server {
                                 if let Ok(net_cmd) = NetCommand::try_from(&object) {
                                     trace!("Handling network command! {:?}", net_cmd);
                                     match net_cmd {
-                                        NetCommand::Master(ref password) => {
+                                        NetCommand::Leader(ref password) => {
                                             // TODO: Handle the password in a sane way. Should
                                             // probably drop the connection if it was wrong, and
                                             // the password should be hashed and fetched from some
                                             // configuration.
-                                            handle.is_master = password == "1234";
-                                            if handle.is_master {
-                                                trace!("Connection is the master node");
+                                            handle.is_leader = password == "1234";
+                                            if handle.is_leader {
+                                                trace!("Connection is the leader node");
                                             } else {
-                                                trace!("Incorrect password -- not master node");
+                                                trace!("Incorrect password -- not leader node");
                                             }
                                         }
                                     }
@@ -198,7 +198,7 @@ impl Server {
 
                                     let response = if cmd.possibly_dirty()
                                         && self.opt.read_only
-                                        && !handle.is_master
+                                        && !handle.is_leader
                                     {
                                         DatabaseResponse {
                                             object: Object::Error(

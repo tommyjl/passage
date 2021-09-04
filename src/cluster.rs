@@ -28,7 +28,7 @@ impl Cluster {
             } else {
                 debug!("Successfully connected to node {:?}", node_address);
 
-                let cmd = NetCommand::Master("1234".to_string());
+                let cmd = NetCommand::Leader("1234".to_string());
                 let obj: Object = cmd.into();
                 let buf: Vec<u8> = obj.into();
                 node_socket.write(&buf)?;
