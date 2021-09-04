@@ -1,6 +1,6 @@
 use crate::cluster::Cluster;
 use crate::command::Command;
-use crate::command::{NetCommand, NetCommandError};
+use crate::command::NetCommand;
 use crate::db::{Database, DatabaseResponse, HashMapDatabase};
 use crate::object::parse;
 use crate::object::Object;
@@ -79,6 +79,7 @@ struct SocketHandle {
     socket: Socket,
     buf: [u8; MESSAGE_MAX_SIZE],
     offset: usize,
+    is_master: bool,
 }
 
 impl SocketHandle {
@@ -87,6 +88,7 @@ impl SocketHandle {
             socket,
             buf: [0u8; MESSAGE_MAX_SIZE],
             offset: 0,
+            is_master: false,
         }
     }
 }
@@ -172,6 +174,20 @@ impl Server {
 
                                 if let Ok(net_cmd) = NetCommand::try_from(&object) {
                                     trace!("Handling network command! {:?}", net_cmd);
+                                    match net_cmd {
+                                        NetCommand::Master(ref password) => {
+                                            // TODO: Handle the password in a sane way. Should
+                                            // probably drop the connection if it was wrong, and
+                                            // the password should be hashed and fetched from some
+                                            // configuration.
+                                            handle.is_master = password == "1234";
+                                            if handle.is_master {
+                                                trace!("Connection is the master node");
+                                            } else {
+                                                trace!("Incorrect password -- not master node");
+                                            }
+                                        }
+                                    }
                                     continue;
                                 }
 
@@ -185,7 +201,10 @@ impl Server {
 
                                 debug!("Incoming command: {:?}", cmd);
 
-                                let response = if self.opt.read_only && cmd.possibly_dirty() {
+                                let response = if cmd.possibly_dirty()
+                                    && self.opt.read_only
+                                    && !handle.is_master
+                                {
                                     DatabaseResponse {
                                         object: Object::Error(
                                             "Read-only mode: Illegal command".to_string(),

@@ -1,3 +1,5 @@
+use crate::command::NetCommand;
+use crate::object::Object;
 use crate::server::{ServerOptions, MESSAGE_MAX_SIZE};
 use log::{debug, error, trace};
 use socket2::{Domain, Socket, Type};
@@ -18,13 +20,19 @@ impl Cluster {
         let mut nodes = Vec::new();
         while nodes.len() < opt.cluster_nodes.len() {
             let node_address: SocketAddr = opt.cluster_nodes[nodes.len()].parse()?;
-            let node_socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+            let mut node_socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
             if let Err(err) = node_socket.connect(&node_address.into()) {
                 debug!("Failed to connect to node {:?}", node_address);
                 error!("{}", err);
                 thread::sleep(Duration::from_millis(opt.cluster_connect_timeout));
             } else {
                 debug!("Successfully connected to node {:?}", node_address);
+
+                let cmd = NetCommand::Master("1234".to_string());
+                let obj: Object = cmd.into();
+                let buf: Vec<u8> = obj.into();
+                node_socket.write(&buf)?;
+
                 nodes.push(node_socket);
             }
         }

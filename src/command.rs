@@ -95,3 +95,14 @@ impl TryFrom<&Object> for NetCommand {
         Err(NetCommandError::NotANetCommand)
     }
 }
+
+impl Into<Object> for NetCommand {
+    fn into(self) -> Object {
+        match self {
+            NetCommand::Master(ref s) => Object::Array(vec![
+                Object::SimpleString("master".to_string()),
+                Object::SimpleString(s.clone()),
+            ]),
+        }
+    }
+}
