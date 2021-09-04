@@ -155,8 +155,6 @@ impl Server {
                             let mut cursor = io::Cursor::new(&handle.buf[..]);
                             let mut offset = 0;
                             while cursor.position() < size as u64 {
-                                offset = cursor.position() as usize;
-
                                 let object = match parse(&mut cursor) {
                                     Ok(o) => o,
                                     Err(err) if matches!(err, crate::object::Error::Incomplete) => {
@@ -188,43 +186,43 @@ impl Server {
                                             }
                                         }
                                     }
-                                    continue;
-                                }
-
-                                let cmd = match Command::try_from(object) {
-                                    Ok(o) => o,
-                                    Err(err) => {
-                                        debug!("Invalid command: {}", err);
-                                        continue;
-                                    }
-                                };
-
-                                debug!("Incoming command: {:?}", cmd);
-
-                                let response = if cmd.possibly_dirty()
-                                    && self.opt.read_only
-                                    && !handle.is_master
-                                {
-                                    DatabaseResponse {
-                                        object: Object::Error(
-                                            "Read-only mode: Illegal command".to_string(),
-                                        ),
-                                        is_dirty: false,
-                                    }
                                 } else {
-                                    self.wal.append(&cmd).unwrap();
-                                    self.db.execute(cmd).unwrap()
-                                };
+                                    let cmd = match Command::try_from(object) {
+                                        Ok(o) => o,
+                                        Err(err) => {
+                                            debug!("Invalid command: {}", err);
+                                            continue;
+                                        }
+                                    };
+                                    debug!("Incoming command: {:?}", cmd);
 
-                                if response.is_dirty {
-                                    let buf = &handle.buf[0..cursor.position() as usize];
-                                    cluster.relay(buf);
-                                }
+                                    let response = if cmd.possibly_dirty()
+                                        && self.opt.read_only
+                                        && !handle.is_master
+                                    {
+                                        DatabaseResponse {
+                                            object: Object::Error(
+                                                "Read-only mode: Illegal command".to_string(),
+                                            ),
+                                            is_dirty: false,
+                                        }
+                                    } else {
+                                        self.wal.append(&cmd).unwrap();
+                                        self.db.execute(cmd).unwrap()
+                                    };
 
-                                let response_buf: Vec<u8> = response.object.into();
-                                if let Err(error) = handle.socket.write(&response_buf) {
-                                    error!("Write: {}", error);
+                                    if response.is_dirty {
+                                        let buf = &handle.buf[offset..cursor.position() as usize];
+                                        cluster.relay(buf);
+                                    }
+
+                                    let response_buf: Vec<u8> = response.object.into();
+                                    if let Err(error) = handle.socket.write(&response_buf) {
+                                        error!("Write: {}", error);
+                                    }
                                 }
+                                offset = cursor.position() as usize;
+                                trace!("{} < {}", offset, size);
                             }
 
                             if offset < size {
