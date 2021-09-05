@@ -11,6 +11,9 @@ struct Opts {
     #[clap(long, default_value = "wal.txt")]
     log_file: String,
 
+    #[clap(long, default_value = "1234")]
+    cluster_password: String,
+
     #[clap(long)]
     cluster_nodes: Vec<String>,
 
@@ -39,6 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         reuse_address: true,
         reuse_port: true,
         nodelay: true,
+        cluster_password: opts.cluster_password,
         cluster_nodes: opts.cluster_nodes,
         cluster_connect_timeout: 1000,
     };

@@ -21,6 +21,7 @@ pub struct Connection {
     pub buf: [u8; MESSAGE_MAX_SIZE],
     pub offset: usize,
     pub closed: bool,
+    password: String,
     mode: ConnectionMode,
 }
 
@@ -39,27 +40,28 @@ impl Connection {
         socket.bind(&address.into())?;
         socket.listen(opt.backlog)?;
         trace!("Listening on {}:{}", address.ip(), address.port());
-        Ok(Connection::new(socket, false))
+        Ok(Connection::new(socket, false, opt))
     }
 
-    pub fn new(socket: Socket, read_only: bool) -> Self {
+    pub fn new(socket: Socket, read_only: bool, opt: &ServerOptions) -> Self {
         Self {
             socket,
             buf: [0u8; MESSAGE_MAX_SIZE],
             offset: 0,
+            closed: false,
             mode: if read_only {
                 ConnectionMode::Read
             } else {
                 ConnectionMode::ReadWrite
             },
-            closed: false,
+            password: opt.cluster_password.clone(),
         }
     }
 
     pub fn accept(&self, opt: &ServerOptions) -> io::Result<Self> {
         let (stream, _addr) = self.socket.accept()?;
         opt.set_sockopts(&stream)?;
-        Ok(Connection::new(stream, opt.read_only))
+        Ok(Connection::new(stream, opt.read_only, opt))
     }
 
     pub fn read(&mut self) -> io::Result<usize> {
@@ -113,7 +115,7 @@ impl Connection {
                         // probably drop the connection if it was wrong, and
                         // the password should be hashed and fetched from some
                         // configuration.
-                        if password == "1234" {
+                        if password == &self.password {
                             trace!("Connection is the leader node");
                             self.mode = ConnectionMode::Leader;
                         } else {

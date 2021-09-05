@@ -26,6 +26,7 @@ pub struct ServerOptions {
     pub nodelay: bool,
 
     // Cluster options
+    pub cluster_password: String,
     pub cluster_nodes: Vec<String>,
     pub cluster_connect_timeout: u64,
 }
