@@ -111,10 +111,6 @@ impl Connection {
                 trace!("Handling network command! {:?}", net_cmd);
                 match net_cmd {
                     NetCommand::Leader(ref password) => {
-                        // TODO: Handle the password in a sane way. Should
-                        // probably drop the connection if it was wrong, and
-                        // the password should be hashed and fetched from some
-                        // configuration.
                         if password == &self.password {
                             trace!("Connection is the leader node");
                             self.mode = ConnectionMode::Leader;
