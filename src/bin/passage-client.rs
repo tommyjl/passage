@@ -19,7 +19,8 @@ fn main() {
     let mut client = Client::new("127.0.0.1:12345");
     match opts.subcmd {
         SubCommand::Get { key } => {
-            let buf = client.get(key);
+            let obj = client.get(key).unwrap();
+            let buf: Vec<u8> = obj.into();
             print!("{}", String::from_utf8(buf).unwrap());
         }
         SubCommand::Set { key, value } => {

@@ -1,6 +1,9 @@
+use crate::object::{parse, Object};
 use crate::server::MESSAGE_MAX_SIZE;
 use socket2::{Domain, Socket, Type};
+use std::error::Error;
 use std::io::prelude::*;
+use std::io::Cursor;
 use std::net::SocketAddr;
 
 pub struct Client {
@@ -15,14 +18,17 @@ impl Client {
         Self { conn: socket }
     }
 
-    pub fn get(&mut self, key: String) -> Vec<u8> {
+    pub fn get(&mut self, key: String) -> Result<Object, Box<dyn Error>> {
         let msg = format!("*2\r\n+get\r\n+{}\r\n", key);
-        let _len = self.conn.write(msg.as_bytes()).unwrap();
+        let _len = self.conn.write(msg.as_bytes())?;
 
         let mut buf = [0; MESSAGE_MAX_SIZE];
-        let len = self.conn.read(&mut buf).unwrap();
+        let len = self.conn.read(&mut buf)?;
 
-        buf[0..len].to_vec()
+        let mut cursor = Cursor::new(&buf[0..len]);
+        let obj = parse(&mut cursor)?;
+
+        Ok(obj)
     }
 
     pub fn set(&mut self, key: String, value: String) -> Vec<u8> {
