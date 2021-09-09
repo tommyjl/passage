@@ -1,10 +1,43 @@
+use crate::object;
 use crate::object::{parse, Object};
 use crate::server::MESSAGE_MAX_SIZE;
 use socket2::{Domain, Socket, Type};
 use std::error::Error;
+use std::io;
 use std::io::prelude::*;
 use std::io::Cursor;
 use std::net::SocketAddr;
+
+type Result<T> = std::result::Result<T, ClientError>;
+
+#[derive(Debug)]
+pub enum ClientError {
+    Io(io::Error),
+    Object(object::Error),
+}
+
+impl Error for ClientError {}
+
+impl std::fmt::Display for ClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClientError::Io(inner) => write!(f, "{}", inner),
+            ClientError::Object(inner) => write!(f, "{}", inner),
+        }
+    }
+}
+
+impl From<io::Error> for ClientError {
+    fn from(err: io::Error) -> Self {
+        ClientError::Io(err)
+    }
+}
+
+impl From<object::Error> for ClientError {
+    fn from(err: object::Error) -> Self {
+        ClientError::Object(err)
+    }
+}
 
 pub struct Client {
     conn: Socket,
@@ -18,7 +51,7 @@ impl Client {
         Self { conn: socket }
     }
 
-    pub fn get(&mut self, key: String) -> Result<Object, Box<dyn Error>> {
+    pub fn get(&mut self, key: String) -> Result<Object> {
         let msg = format!("*2\r\n+get\r\n+{}\r\n", key);
         let _len = self.conn.write(msg.as_bytes())?;
 
