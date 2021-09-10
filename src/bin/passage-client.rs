@@ -24,11 +24,11 @@ fn main() {
             print!("{}", String::from_utf8(buf).unwrap());
         }
         SubCommand::Set { key, value } => {
-            let buf = client.set(key, value);
+            let buf = client.set(key, value).unwrap();
             print!("{}", String::from_utf8(buf).unwrap());
         }
         SubCommand::Remove { key } => {
-            let buf = client.remove(key);
+            let buf = client.remove(key).unwrap();
             print!("{}", String::from_utf8(buf).unwrap());
         }
     };

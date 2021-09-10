@@ -53,7 +53,7 @@ impl Client {
 
     pub fn get(&mut self, key: String) -> Result<Object> {
         let msg = format!("*2\r\n+get\r\n+{}\r\n", key);
-        let _len = self.conn.write(msg.as_bytes())?;
+        self.conn.write(msg.as_bytes())?;
 
         let mut buf = [0; MESSAGE_MAX_SIZE];
         let len = self.conn.read(&mut buf)?;
@@ -64,23 +64,23 @@ impl Client {
         Ok(obj)
     }
 
-    pub fn set(&mut self, key: String, value: String) -> Vec<u8> {
+    pub fn set(&mut self, key: String, value: String) -> Result<Vec<u8>> {
         let msg = format!("*3\r\n+set\r\n+{}\r\n+{}\r\n", key, value);
-        let _len = self.conn.write(msg.as_bytes()).unwrap();
+        self.conn.write(msg.as_bytes())?;
 
         let mut buf = [0; MESSAGE_MAX_SIZE];
-        let len = self.conn.read(&mut buf).unwrap();
+        let len = self.conn.read(&mut buf)?;
 
-        buf[0..len].to_vec()
+        Ok(buf[0..len].to_vec())
     }
 
-    pub fn remove(&mut self, key: String) -> Vec<u8> {
+    pub fn remove(&mut self, key: String) -> Result<Vec<u8>> {
         let msg = format!("*2\r\n+remove\r\n+{}\r\n", key);
-        let _len = self.conn.write(msg.as_bytes()).unwrap();
+        self.conn.write(msg.as_bytes())?;
 
         let mut buf = [0; MESSAGE_MAX_SIZE];
-        let len = self.conn.read(&mut buf).unwrap();
+        let len = self.conn.read(&mut buf)?;
 
-        buf[0..len].to_vec()
+        Ok(buf[0..len].to_vec())
     }
 }
