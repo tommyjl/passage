@@ -64,23 +64,29 @@ impl Client {
         Ok(obj)
     }
 
-    pub fn set(&mut self, key: String, value: String) -> Result<Vec<u8>> {
+    pub fn set(&mut self, key: String, value: String) -> Result<Object> {
         let msg = format!("*3\r\n+set\r\n+{}\r\n+{}\r\n", key, value);
         self.conn.write(msg.as_bytes())?;
 
         let mut buf = [0; MESSAGE_MAX_SIZE];
         let len = self.conn.read(&mut buf)?;
 
-        Ok(buf[0..len].to_vec())
+        let mut cursor = Cursor::new(&buf[0..len]);
+        let obj = parse(&mut cursor)?;
+
+        Ok(obj)
     }
 
-    pub fn remove(&mut self, key: String) -> Result<Vec<u8>> {
+    pub fn remove(&mut self, key: String) -> Result<Object> {
         let msg = format!("*2\r\n+remove\r\n+{}\r\n", key);
         self.conn.write(msg.as_bytes())?;
 
         let mut buf = [0; MESSAGE_MAX_SIZE];
         let len = self.conn.read(&mut buf)?;
 
-        Ok(buf[0..len].to_vec())
+        let mut cursor = Cursor::new(&buf[0..len]);
+        let obj = parse(&mut cursor)?;
+
+        Ok(obj)
     }
 }
